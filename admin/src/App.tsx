@@ -229,8 +229,10 @@ function App() {
   useEffect(() => {
     if (!token) return;
 
-    // Connect to global SSE events feed
-    const eventSource = new EventSource(`/api/events?token=${token}`);
+    // Connect to global SSE events feed (resolve base URL from env)
+    const apiBase = import.meta.env.VITE_API_URL || "";
+    const cleanApiBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
+    const eventSource = new EventSource(`${cleanApiBase}/api/events?token=${token}`);
 
     eventSource.onmessage = (event) => {
       try {
