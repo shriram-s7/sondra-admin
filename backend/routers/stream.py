@@ -104,11 +104,12 @@ async def stream_song_proxy(
 
         # Determine content type based on file extension
         content_type = "audio/mpeg"
-        if song.filename and song.filename.lower().endswith(".flac"):
+        title_lower = song.title.lower() if song.title else ""
+        if title_lower.endswith(".flac"):
             content_type = "audio/flac"
-        elif song.filename and (song.filename.lower().endswith(".m4a") or song.filename.lower().endswith(".mp4")):
+        elif title_lower.endswith(".m4a") or title_lower.endswith(".mp4"):
             content_type = "audio/mp4"
-        elif song.filename and song.filename.lower().endswith(".wav"):
+        elif title_lower.endswith(".wav"):
             content_type = "audio/wav"
 
         # Create an async client and stream the response
