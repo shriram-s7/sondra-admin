@@ -17,7 +17,7 @@ from mutagen.flac import FLAC
 
 load_dotenv()
 
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def get_drive_service():
