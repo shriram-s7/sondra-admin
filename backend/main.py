@@ -143,9 +143,9 @@ async def api_sse_events(request: Request):
     from routers.sync import sse_events_endpoint
     return await sse_events_endpoint(request)
 
-@app.get("/health")
-def health_check():
-    """Health check endpoint."""
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health():
+    """Health check endpoint supporting GET and HEAD requests."""
     return {"status": "ok"}
 
 @app.get("/")
