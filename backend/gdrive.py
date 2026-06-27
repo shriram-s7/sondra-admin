@@ -360,5 +360,5 @@ def get_direct_stream_url(gdrive_file_id: str) -> str:
     except Exception as e:
         print(f"Error creating file sharing permission for {gdrive_file_id}: {e}")
     
-    # Return the direct download URL format
-    return f"https://drive.google.com/uc?export=download&id={gdrive_file_id}"
+    # Return the direct usercontent download URL format to bypass cross-origin redirect headers
+    return f"https://drive.usercontent.google.com/download?id={gdrive_file_id}&export=download"
