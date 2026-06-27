@@ -72,11 +72,12 @@ def stream_song(
 async def stream_song_proxy(
     song_id: int,
     token: str,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     """
     Streams the song content from Google Drive acting as an authenticated proxy.
-    Validates token from the query parameters.
+    Supports Range requests for seeking compatibility in browsers.
     """
     try:
         # Validate JWT token
@@ -92,8 +93,14 @@ async def stream_song_proxy(
         raise HTTPException(status_code=404, detail="Song not found")
 
     try:
-        drive_service = gdrive.get_drive_service()
-        request = drive_service.files().get_media(fileId=song.gdrive_file_id)
+        access_token = gdrive.get_access_token()
+        url = f"https://www.googleapis.com/drive/v3/files/{song.gdrive_file_id}?alt=media"
+
+        # Pass through the Range header if requested by the browser
+        headers = {"Authorization": f"Bearer {access_token}"}
+        client_range = request.headers.get("range")
+        if client_range:
+            headers["Range"] = client_range
 
         # Determine content type based on file extension
         content_type = "audio/mpeg"
@@ -104,22 +111,44 @@ async def stream_song_proxy(
         elif song.filename and song.filename.lower().endswith(".wav"):
             content_type = "audio/wav"
 
-        def iterfile():
-            fh = io.BytesIO()
-            downloader = googleapiclient.http.MediaIoBaseDownload(fh, request, chunksize=1024*256)
-            done = False
-            last_position = 0
-            while not done:
-                _, done = downloader.next_chunk()
-                fh.seek(last_position)
-                chunk = fh.read()
-                last_position = fh.tell()
-                yield chunk
+        # Create an async client and stream the response
+        client = httpx.AsyncClient()
+        response = await client.send(
+            client.build_request("GET", url, headers=headers),
+            stream=True
+        )
+
+        if response.status_code not in [200, 206]:
+            await response.aclose()
+            await client.aclose()
+            raise HTTPException(
+                status_code=response.status_code, 
+                detail=f"Google Drive API error: {response.status_code}"
+            )
+
+        # Set up response headers
+        resp_headers = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+        }
+        if "content-range" in response.headers:
+            resp_headers["Content-Range"] = response.headers["content-range"]
+        if "content-length" in response.headers:
+            resp_headers["Content-Length"] = response.headers["content-length"]
+
+        async def stream_generator():
+            try:
+                async for chunk in response.iter_bytes(chunk_size=1024*128):
+                    yield chunk
+            finally:
+                await response.aclose()
+                await client.aclose()
 
         return StreamingResponse(
-            iterfile(),
+            stream_generator(),
+            status_code=response.status_code,
             media_type=content_type,
-            headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"}
+            headers=resp_headers
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proxy streaming failed: {str(e)}")
