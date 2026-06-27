@@ -371,24 +371,19 @@ function App() {
     }
   };
 
-  const handlePlaySong = async (song: Song, playlistSongsList: Song[] = []) => {
+  const handlePlaySong = (song: Song, playlistSongsList: Song[] = []) => {
     setCurrentSong(song);
     setIsPlaying(true);
     setActivePlaylistSongs(playlistSongsList.length > 0 ? playlistSongsList : songs);
     
-    try {
-      const response = await api.get(`/api/stream/${song.id}`);
-      const directStreamUrl = response.data.stream_url;
-      
-      if (audioRef.current) {
-        audioRef.current.src = directStreamUrl;
-        audioRef.current.load();
-        audioRef.current.play().catch((err) => console.error("Playback error:", err));
-      }
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.error || "Failed to fetch stream URL.";
-      addToast(errorMsg, "error");
-      setIsPlaying(false);
+    const apiBase = import.meta.env.VITE_API_URL || "";
+    const cleanApiBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
+    const streamUrl = `${cleanApiBase}/api/stream/${song.id}/proxy?token=${token}`;
+    
+    if (audioRef.current) {
+      audioRef.current.src = streamUrl;
+      audioRef.current.load();
+      audioRef.current.play().catch((err) => console.error("Playback error:", err));
     }
   };
 
