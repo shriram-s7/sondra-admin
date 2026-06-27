@@ -48,6 +48,29 @@ def get_drive_service():
         try:
             import json
             creds_info = json.loads(token_env)
+            
+            # Inject client_id and client_secret if missing, to allow token refresh on headless servers
+            if "client_id" not in creds_info or "client_secret" not in creds_info:
+                client_config = None
+                creds_env_str = os.getenv("GDRIVE_CREDS_JSON")
+                if creds_env_str:
+                    try:
+                        client_config = json.loads(creds_env_str)
+                    except Exception:
+                        pass
+                if not client_config and os.path.exists(creds_path):
+                    try:
+                        with open(creds_path, "r") as f:
+                            client_config = json.load(f)
+                    except Exception:
+                        pass
+                
+                if client_config:
+                    key = "installed" if "installed" in client_config else "web"
+                    if key in client_config:
+                        creds_info["client_id"] = client_config[key]["client_id"]
+                        creds_info["client_secret"] = client_config[key]["client_secret"]
+            
             creds = Credentials.from_authorized_user_info(creds_info, SCOPES)
             print("Loaded Google OAuth credentials from GDRIVE_TOKEN_JSON environment variable.")
         except Exception as e:
@@ -56,7 +79,26 @@ def get_drive_service():
     # 2. Fallback to loading token.json file
     if not creds and os.path.exists(token_path):
         try:
-            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+            # We also inject client_id and client_secret to local token.json if loaded to ensure refresh works locally
+            with open(token_path, "r") as f:
+                import json
+                creds_info = json.load(f)
+            
+            if "client_id" not in creds_info or "client_secret" not in creds_info:
+                client_config = None
+                if os.path.exists(creds_path):
+                    try:
+                        with open(creds_path, "r") as f2:
+                            client_config = json.load(f2)
+                    except Exception:
+                        pass
+                if client_config:
+                    key = "installed" if "installed" in client_config else "web"
+                    if key in client_config:
+                        creds_info["client_id"] = client_config[key]["client_id"]
+                        creds_info["client_secret"] = client_config[key]["client_secret"]
+            
+            creds = Credentials.from_authorized_user_info(creds_info, SCOPES)
         except Exception as e:
             print(f"Error loading token.json: {e}")
 
@@ -73,13 +115,10 @@ def get_drive_service():
             # Check if we can load credentials configuration from environment variable
             creds_env_str = os.getenv("GDRIVE_CREDS_JSON")
             if creds_env_str:
-                try:
-                    import json
-                    client_config = json.loads(creds_env_str)
-                    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-                    creds = flow.run_local_server(port=0)
-                except Exception as e:
-                    raise RuntimeError(f"Failed to load oauth credentials from env GDRIVE_CREDS_JSON: {e}")
+                raise RuntimeError(
+                    "Google Drive OAuth token has expired or is invalid, and could not be refreshed. "
+                    "Please regenerate a fresh token.json locally (run start.bat) and update GDRIVE_TOKEN_JSON on Render."
+                )
             else:
                 if not os.path.exists(creds_path):
                     # Try fallback names if 'credentials.json' is configured but might be 'creds.json'
