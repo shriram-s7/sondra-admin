@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: sondra-backend
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GDRIVE_ROOT_FOLDER_ID
+        sync: false
+      - key: GDRIVE_TOKEN_JSON
+        sync: false
+      - key: GDRIVE_CREDS_JSON
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SYNC_INTERVAL_SECONDS
+        value: "60"

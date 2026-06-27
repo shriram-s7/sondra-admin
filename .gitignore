@@ -1,0 +1,48 @@
+# Credentials and Environment files
+.env
+.env.local
+.env.*.local
+token.json
+credentials.json
+creds.json
+*.env
+
+# Python Backend
+backend/venv/
+backend/venv_old/
+backend/__pycache__/
+backend/*/__pycache__/
+backend/*.pyc
+backend/*.pyo
+backend/*.pyd
+backend/*.db
+backend/sondra.db
+backend/token.json
+backend/credentials.json
+backend/creds.json
+
+# Node/React Frontend
+admin/node_modules/
+admin/dist/
+admin/.env
+admin/.env.local
+
+# Flutter App
+app/.dart_tool/
+app/.packages
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/build/
+app/android/.gradle/
+app/android/local.properties
+app/ios/Flutter/Flutter.podspec
+app/ios/Flutter/Generated.xcconfig
+app/ios/Flutter/flutter_export_environment.sh
+app/windows/flutter/ephemeral/
+app/build/windows/
+app/build/windows/installer/
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
