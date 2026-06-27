@@ -139,7 +139,7 @@ async def stream_song_proxy(
 
         async def stream_generator():
             try:
-                async for chunk in response.iter_bytes(chunk_size=1024*128):
+                async for chunk in response.aiter_bytes(chunk_size=1024*128):
                     yield chunk
             finally:
                 await response.aclose()
