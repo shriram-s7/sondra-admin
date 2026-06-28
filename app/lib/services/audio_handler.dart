@@ -9,6 +9,8 @@ class SondraAudioHandler extends BaseAudioHandler {
   final AudioPlayer _player = AudioPlayer();
   SMTCWindows? _smtc;
   Future<void>? _initFuture;
+  bool _isLoading = false;
+  DateTime? _lastSmtcAction;
 
   // Callbacks hooked by the Riverpod notifier
   Future<void> Function()? onSkipToNext;
@@ -46,6 +48,13 @@ class SondraAudioHandler extends BaseAudioHandler {
     
     // Listen to button press streams
     _smtc!.buttonPressStream.listen((event) async {
+      final now = DateTime.now();
+      if (_lastSmtcAction != null && 
+          now.difference(_lastSmtcAction!) < const Duration(milliseconds: 600)) {
+        return;
+      }
+      _lastSmtcAction = now;
+
       switch (event) {
         case PressedButton.play:
           play();
@@ -84,7 +93,14 @@ class SondraAudioHandler extends BaseAudioHandler {
   }
 
   Future<void> playUri(String uri, MediaItem item) async {
-    await ensureInitialized();
+    if (_isLoading) {
+      try {
+        await _player.stop();
+      } catch (_) {}
+    }
+    _isLoading = true;
+    try {
+      await ensureInitialized();
     mediaItem.add(item);
 
     // Update SMTC Metadata on Windows
@@ -147,6 +163,9 @@ class SondraAudioHandler extends BaseAudioHandler {
         }
       }
       await _player.play();
+    } finally {
+      _isLoading = false;
+    }
     } catch (e) {
       print("Audio player setSource error: $e");
       playbackState.add(playbackState.value.copyWith(

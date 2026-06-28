@@ -300,6 +300,8 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   StreamSubscription? _posSub;
   StreamSubscription? _durSub;
   StreamSubscription? _stateSub;
+  bool _isBusy = false;
+  DateTime? _lastActionTime;
 
   PlayerNotifier() : super(PlayerState()) {
     _posSub = globalAudioHandler.player.positionStream.listen((pos) {
@@ -345,71 +347,77 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     };
   }
 
-  Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName}) async {
-    // 1. Immediately stop current playback to release native resources instantly
-    await globalAudioHandler.player.stop();
-    await globalAudioHandler.player.seek(Duration.zero);
+  Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName, bool internalCall = false}) async {
+    if (_isBusy && !internalCall) return;
+    _isBusy = true;
+    try {
+      // 1. Immediately stop current playback to release native resources instantly
+      await globalAudioHandler.player.stop();
+      await globalAudioHandler.player.seek(Duration.zero);
 
-    // 2. Identify if it is a new queue or transition within the same queue
-    bool isNewQueue = false;
-    if (state.originalPlaylist.length != playlist.length) {
-      isNewQueue = true;
-    } else {
-      for (int i = 0; i < playlist.length; i++) {
-        if (state.originalPlaylist[i]["id"] != playlist[i]["id"]) {
-          isNewQueue = true;
-          break;
+      // 2. Identify if it is a new queue or transition within the same queue
+      bool isNewQueue = false;
+      if (state.originalPlaylist.length != playlist.length) {
+        isNewQueue = true;
+      } else {
+        for (int i = 0; i < playlist.length; i++) {
+          if (state.originalPlaylist[i]["id"] != playlist[i]["id"]) {
+            isNewQueue = true;
+            break;
+          }
         }
       }
-    }
 
-    List<Map<String, dynamic>> newOriginal = isNewQueue ? playlist : state.originalPlaylist;
-    List<Map<String, dynamic>> newActive = isNewQueue ? List.from(playlist) : state.activePlaylist;
+      List<Map<String, dynamic>> newOriginal = isNewQueue ? playlist : state.originalPlaylist;
+      List<Map<String, dynamic>> newActive = isNewQueue ? List.from(playlist) : state.activePlaylist;
 
-    // Apply active shuffle to new queue immediately if turned on
-    if (isNewQueue && state.shuffle) {
-      _secureShuffle(newActive);
-      newActive.removeWhere((s) => s["id"] == song["id"]);
-      newActive.insert(0, song);
-    }
-
-    state = state.copyWith(
-      currentSong: song,
-      originalPlaylist: newOriginal,
-      activePlaylist: newActive,
-      activePlaylistName: playlistName ?? (isNewQueue ? "Music Library" : state.activePlaylistName),
-      position: startSeconds != null ? Duration(seconds: startSeconds) : Duration.zero,
-      isBuffering: true,
-    );
-
-    try {
-      // 3. INSTANT PLAYBACK: Use local file if downloaded, otherwise stream
-      String directUrl;
-      final localPath = song["local_file_path"];
-      if (localPath != null && await File(localPath).exists()) {
-        directUrl = localPath;
-      } else {
-        directUrl = "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
+      // Apply active shuffle to new queue immediately if turned on
+      if (isNewQueue && state.shuffle) {
+        _secureShuffle(newActive);
+        newActive.removeWhere((s) => s["id"] == song["id"]);
+        newActive.insert(0, song);
       }
 
-      final mediaItem = MediaItem(
-        id: song["id"].toString(),
-        album: song["album"] ?? "Unknown Album",
-        title: song["title"] ?? "Unknown Title",
-        artist: song["artist"] ?? "Unknown Artist",
-        duration: Duration(seconds: song["duration_seconds"] ?? 0),
-        artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover"),
+      state = state.copyWith(
+        currentSong: song,
+        originalPlaylist: newOriginal,
+        activePlaylist: newActive,
+        activePlaylistName: playlistName ?? (isNewQueue ? "Music Library" : state.activePlaylistName),
+        position: startSeconds != null ? Duration(seconds: startSeconds) : Duration.zero,
+        isBuffering: true,
       );
 
-      await globalAudioHandler.playUri(directUrl, mediaItem);
-      
-      if (startSeconds != null) {
-        await globalAudioHandler.seek(Duration(seconds: startSeconds));
+      try {
+        // 3. INSTANT PLAYBACK: Use local file if downloaded, otherwise stream
+        String directUrl;
+        final localPath = song["local_file_path"];
+        if (localPath != null && await File(localPath).exists()) {
+          directUrl = localPath;
+        } else {
+          directUrl = "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
+        }
+
+        final mediaItem = MediaItem(
+          id: song["id"].toString(),
+          album: song["album"] ?? "Unknown Album",
+          title: song["title"] ?? "Unknown Title",
+          artist: song["artist"] ?? "Unknown Artist",
+          duration: Duration(seconds: song["duration_seconds"] ?? 0),
+          artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover"),
+        );
+
+        await globalAudioHandler.playUri(directUrl, mediaItem);
+        
+        if (startSeconds != null) {
+          await globalAudioHandler.seek(Duration(seconds: startSeconds));
+        }
+      } catch (e) {
+        print("Error loading song in provider: $e");
+        // Skip to next song automatically on loading error (Rule 5)
+        handleNext();
       }
-    } catch (e) {
-      print("Error loading song in provider: $e");
-      // Skip to next song automatically on loading error (Rule 5)
-      handleNext();
+    } finally {
+      _isBusy = false;
     }
   }
 
@@ -525,77 +533,105 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   }
 
   Future<void> handleNext() async {
-    if (state.currentSong == null) return;
-
-    // RULE 1 - QUEUE PLAYS ACROSS PLAYLISTS
-    if (state.queue.isNotEmpty) {
-      final nextSong = state.queue.first;
-      final remainingQueue = List<Map<String, dynamic>>.from(state.queue)..removeAt(0);
-      state = state.copyWith(queue: remainingQueue);
-      
-      final contextResult = await _findPlaylistContextFor(nextSong);
-      final plName = contextResult['name'] as String;
-      final plSongs = contextResult['songs'] as List<Map<String, dynamic>>;
-      
-      await playSong(nextSong, plSongs, playlistName: plName);
+    final now = DateTime.now();
+    if (_lastActionTime != null && 
+        now.difference(_lastActionTime!) < const Duration(milliseconds: 500)) {
       return;
     }
+    _lastActionTime = now;
 
-    // RULE 2 - CURRENT PLAYLIST PLAYS THROUGH COMPLETELY
-    if (state.activePlaylist.isEmpty) return;
-    int idx = state.activePlaylist.indexWhere((s) => s["id"] == state.currentSong!["id"]);
-    
-    if (idx != -1) {
-      int nextIdx = idx + 1;
-      if (nextIdx >= state.activePlaylist.length) {
-        // RULE 5 - Loop/Repeat checks
-        if (state.repeat == "all") {
-          nextIdx = 0;
-          await playSong(state.activePlaylist[nextIdx], state.originalPlaylist);
-        } else {
-          // RULE 3 & 4 - WHAT HAPPENS WHEN PLAYLIST ENDS
-          final allLibrary = await _api.getSongs();
-          if (allLibrary.isEmpty) {
-            globalAudioHandler.pause();
-            seek(Duration.zero);
-            return;
-          }
-          
-          final rand = Random.secure();
-          final randomSong = Map<String, dynamic>.from(allLibrary[rand.nextInt(allLibrary.length)]);
-          
-          final contextResult = await _findPlaylistContextFor(randomSong);
-          final plName = contextResult['name'] as String;
-          final plSongs = contextResult['songs'] as List<Map<String, dynamic>>;
-          
-          await playSong(randomSong, plSongs, playlistName: plName);
-        }
-      } else {
-        await playSong(state.activePlaylist[nextIdx], state.originalPlaylist);
+    if (_isBusy) return;
+    _isBusy = true;
+
+    try {
+      if (state.currentSong == null) return;
+
+      // RULE 1 - QUEUE PLAYS ACROSS PLAYLISTS
+      if (state.queue.isNotEmpty) {
+        final nextSong = state.queue.first;
+        final remainingQueue = List<Map<String, dynamic>>.from(state.queue)..removeAt(0);
+        state = state.copyWith(queue: remainingQueue);
+        
+        final contextResult = await _findPlaylistContextFor(nextSong);
+        final plName = contextResult['name'] as String;
+        final plSongs = contextResult['songs'] as List<Map<String, dynamic>>;
+        
+        await playSong(nextSong, plSongs, playlistName: plName, internalCall: true);
+        return;
       }
+
+      // RULE 2 - CURRENT PLAYLIST PLAYS THROUGH COMPLETELY
+      if (state.activePlaylist.isEmpty) return;
+      int idx = state.activePlaylist.indexWhere((s) => s["id"] == state.currentSong!["id"]);
+      
+      if (idx != -1) {
+        int nextIdx = idx + 1;
+        if (nextIdx >= state.activePlaylist.length) {
+          // RULE 5 - Loop/Repeat checks
+          if (state.repeat == "all") {
+            nextIdx = 0;
+            await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
+          } else {
+            // RULE 3 & 4 - WHAT HAPPENS WHEN PLAYLIST ENDS
+            final allLibrary = await _api.getSongs();
+            if (allLibrary.isEmpty) {
+              globalAudioHandler.pause();
+              seek(Duration.zero);
+              return;
+            }
+            
+            final rand = Random.secure();
+            final randomSong = Map<String, dynamic>.from(allLibrary[rand.nextInt(allLibrary.length)]);
+            
+            final contextResult = await _findPlaylistContextFor(randomSong);
+            final plName = contextResult['name'] as String;
+            final plSongs = contextResult['songs'] as List<Map<String, dynamic>>;
+            
+            await playSong(randomSong, plSongs, playlistName: plName, internalCall: true);
+          }
+        } else {
+          await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
+        }
+      }
+    } finally {
+      _isBusy = false;
     }
   }
 
-  void handlePrev() {
-    if (state.activePlaylist.isEmpty || state.currentSong == null) return;
-    
-    // Restart song if it has played past 3 seconds
-    if (state.position.inSeconds > 3) {
-      seek(Duration.zero);
+  Future<void> handlePrev() async {
+    final now = DateTime.now();
+    if (_lastActionTime != null && 
+        now.difference(_lastActionTime!) < const Duration(milliseconds: 500)) {
       return;
     }
+    _lastActionTime = now;
 
-    int idx = state.activePlaylist.indexWhere((s) => s["id"] == state.currentSong!["id"]);
-    if (idx != -1) {
-      int prevIdx = idx - 1;
-      if (prevIdx < 0) {
-        if (state.repeat == "all") {
-          prevIdx = state.activePlaylist.length - 1;
-        } else {
-          prevIdx = 0;
-        }
+    if (_isBusy) return;
+    _isBusy = true;
+
+    try {
+      if (state.activePlaylist.isEmpty || state.currentSong == null) return;
+      
+      // Restart song if it has played past 3 seconds
+      if (state.position.inSeconds > 3) {
+        seek(Duration.zero);
+        return;
       }
-      playSong(state.activePlaylist[prevIdx], state.originalPlaylist);
+
+      int idx = state.activePlaylist.indexWhere((s) => s["id"] == state.currentSong!["id"]);
+      if (idx != -1) {
+        int prevIdx = idx - 1;
+        if (prevIdx < 0) {
+          if (state.repeat == "all") {
+            prevIdx = state.activePlaylist.length - 1;
+          } else {
+            prevIdx = 0;
+          }
+        }
+        await playSong(state.activePlaylist[prevIdx], state.originalPlaylist, internalCall: true);
+      }
+    } finally {
+      _isBusy = false;
     }
   }
 
@@ -4142,6 +4178,8 @@ class SondraAudioHandler extends BaseAudioHandler {
   final AudioPlayer _player = AudioPlayer();
   SMTCWindows? _smtc;
   Future<void>? _initFuture;
+  bool _isLoading = false;
+  DateTime? _lastSmtcAction;
 
   // Callbacks hooked by the Riverpod notifier
   Future<void> Function()? onSkipToNext;
@@ -4179,6 +4217,13 @@ class SondraAudioHandler extends BaseAudioHandler {
     
     // Listen to button press streams
     _smtc!.buttonPressStream.listen((event) async {
+      final now = DateTime.now();
+      if (_lastSmtcAction != null && 
+          now.difference(_lastSmtcAction!) < const Duration(milliseconds: 600)) {
+        return;
+      }
+      _lastSmtcAction = now;
+
       switch (event) {
         case PressedButton.play:
           play();
@@ -4217,7 +4262,14 @@ class SondraAudioHandler extends BaseAudioHandler {
   }
 
   Future<void> playUri(String uri, MediaItem item) async {
-    await ensureInitialized();
+    if (_isLoading) {
+      try {
+        await _player.stop();
+      } catch (_) {}
+    }
+    _isLoading = true;
+    try {
+      await ensureInitialized();
     mediaItem.add(item);
 
     // Update SMTC Metadata on Windows
@@ -4280,6 +4332,9 @@ class SondraAudioHandler extends BaseAudioHandler {
         }
       }
       await _player.play();
+    } finally {
+      _isLoading = false;
+    }
     } catch (e) {
       print("Audio player setSource error: $e");
       playbackState.add(playbackState.value.copyWith(
