@@ -52,12 +52,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ApiService().sseController.stream.listen((event) {
       if (event["type"] == "library_updated") {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Library updated"),
-              backgroundColor: Color(0xFF8B5CF6),
-            ),
-          );
           // Invalidate Riverpod providers to trigger silent reload
           ref.invalidate(songsProvider);
           ref.invalidate(playlistsProvider);
