@@ -1066,7 +1066,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               type: BottomNavigationBarType.fixed,
               items: const [
                 BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: "Home"),
-                BottomNavigationBarItem(icon: Icon(Icons.music_note_rounded), label: "Library"),
+                BottomNavigationBarItem(icon: Icon(Icons.music_note_rounded), label: "Song Pool"),
                 BottomNavigationBarItem(icon: Icon(Icons.list_rounded), label: "Playlists"),
                 BottomNavigationBarItem(icon: Icon(Icons.settings_rounded), label: "Settings"),
               ],
@@ -1119,7 +1119,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           const SizedBox(height: 28),
           _sidebarItem(Icons.home_rounded, "Home", 0),
-          _sidebarItem(Icons.music_note_rounded, "Library", 1),
+          _sidebarItem(Icons.music_note_rounded, "Song Pool", 1),
           _sidebarItem(Icons.list_rounded, "Playlists", 2),
           const Spacer(),
           _sidebarItem(Icons.settings_rounded, "Settings", 3),
@@ -1218,7 +1218,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("Music Library", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+          const Text("Song Pool", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
           TextField(
             controller: _searchController,
@@ -1288,7 +1288,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         }
                       },
                       child: ListTile(
-                        onTap: () => ref.read(playerProvider.notifier).playSong(song, filtered, playlistName: "Music Library"),
+                        onTap: () => ref.read(playerProvider.notifier).playSong(song, filtered, playlistName: "Song Pool"),
                         contentPadding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
                         leading: SongCoverWidget(
                           song: song,
