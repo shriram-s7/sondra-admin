@@ -1179,16 +1179,18 @@ class _PlaylistDetailScreen extends ConsumerWidget {
     return Scaffold(
       backgroundColor: const Color(0xFF08070D),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF111019),
+        backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
-        title: Text(name, style: const TextStyle(color: Colors.white)),
         elevation: 0,
       ),
       body: ListView.builder(
         padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
-        itemCount: songs.length,
+        itemCount: songs.length + 1,
         itemBuilder: (ctx, idx) {
-          final s = songs[idx];
+          if (idx == 0) {
+            return _PlaylistHeaderSection(name: name, songs: songs);
+          }
+          final s = songs[idx - 1];
           final isCurrent = playerState.currentSong?["id"] == s["id"];
           return GestureDetector(
             onSecondaryTapDown: (details) {
@@ -1260,20 +1262,22 @@ class _PlaylistDetailScreenInline extends ConsumerWidget {
     return Scaffold(
       backgroundColor: const Color(0xFF08070D),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF111019),
+        backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
           onPressed: onBack,
         ),
-        title: Text(name, style: const TextStyle(color: Colors.white)),
         elevation: 0,
       ),
       body: ListView.builder(
         padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
-        itemCount: songs.length,
+        itemCount: songs.length + 1,
         itemBuilder: (ctx, idx) {
-          final s = songs[idx];
+          if (idx == 0) {
+            return _PlaylistHeaderSection(name: name, songs: songs);
+          }
+          final s = songs[idx - 1];
           final isCurrent = playerState.currentSong?["id"] == s["id"];
           return GestureDetector(
             onSecondaryTapDown: (details) {
@@ -1318,6 +1322,108 @@ class _PlaylistDetailScreenInline extends ConsumerWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _PlaylistHeaderSection extends ConsumerWidget {
+  final String name;
+  final List<Map<String, dynamic>> songs;
+  final String? extraInfo;
+
+  const _PlaylistHeaderSection({
+    required this.name,
+    required this.songs,
+    this.extraInfo,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final playerState = ref.watch(playerProvider);
+    final isShuffled = playerState.shuffle;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            name,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Text(
+                "${songs.length} song${songs.length == 1 ? '' : 's'}",
+                style: const TextStyle(color: Colors.white54, fontSize: 14),
+              ),
+              if (extraInfo != null && extraInfo!.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                const Text("•", style: TextStyle(color: Colors.white30)),
+                const SizedBox(width: 8),
+                Text(
+                  extraInfo!,
+                  style: const TextStyle(color: Color(0xFF10B981), fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              ElevatedButton.icon(
+                onPressed: songs.isEmpty
+                    ? null
+                    : () {
+                        ref.read(playerProvider.notifier).playSong(songs.first, songs, playlistName: name);
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF8B5CF6),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                ),
+                icon: const Icon(Icons.play_arrow_rounded, size: 22),
+                label: const Text("Play All", style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: songs.isEmpty
+                    ? null
+                    : () {
+                        ref.read(playerProvider.notifier).playPlaylistShuffled(songs, name);
+                      },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: isShuffled ? const Color(0xFF8B5CF6) : Colors.white,
+                  side: BorderSide(
+                    color: isShuffled ? const Color(0xFF8B5CF6) : Colors.white24,
+                    width: 1.5,
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                ),
+                icon: Icon(
+                  Icons.shuffle_rounded,
+                  color: isShuffled ? const Color(0xFF8B5CF6) : Colors.white70,
+                  size: 20,
+                ),
+                label: Text(
+                  "Shuffle",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isShuffled ? const Color(0xFF8B5CF6) : Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

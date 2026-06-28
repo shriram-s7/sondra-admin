@@ -405,6 +405,16 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     state = state.copyWith(queue: const []);
   }
 
+  Future<void> playPlaylistShuffled(List<Map<String, dynamic>> playlist, String playlistName) async {
+    if (playlist.isEmpty) return;
+    if (!state.shuffle) {
+      toggleShuffle();
+    }
+    final rand = Random.secure();
+    final startSong = playlist[rand.nextInt(playlist.length)];
+    await playSong(startSong, playlist, playlistName: playlistName);
+  }
+
   @override
   void dispose() {
     _posSub?.cancel();

@@ -102,10 +102,12 @@ class _OfflinePlaylistScreenState
     final hasPendingDownloads = songs.any((s) => s['status'] == 'downloading');
     final hasNotDownloaded = songs.any((s) => s['status'] == 'notDownloaded');
 
+    final bottomPad = playerState.currentSong != null ? (Platform.isWindows ? 90.0 : 76.0) : 0.0;
+
     return Scaffold(
       backgroundColor: const Color(0xFF08070D),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF111019),
+        backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         leading: widget.onBack != null
             ? IconButton(
@@ -113,19 +115,6 @@ class _OfflinePlaylistScreenState
                 onPressed: widget.onBack,
               )
             : null,
-        title: Row(
-          children: [
-            Icon(
-                _playlist['type'] == 'personal'
-                    ? Icons.playlist_play_rounded
-                    : Icons.offline_pin_rounded,
-                color: const Color(0xFF8B5CF6),
-                size: 20),
-            const SizedBox(width: 8),
-            Text(_playlist['name'] ?? '',
-                style: const TextStyle(color: Colors.white)),
-          ],
-        ),
         actions: [
           if (hasNotDownloaded && _playlist['type'] != 'personal')
             IconButton(
@@ -150,15 +139,45 @@ class _OfflinePlaylistScreenState
         ],
         elevation: 0,
       ),
-      body: songs.isEmpty
-          ? const Center(
-              child: Text('No songs in this playlist',
-                  style: TextStyle(color: Colors.white38)))
-          : ListView.builder(
-              padding: const EdgeInsets.only(left: 8, right: 8, top: 8, bottom: 16),
-              itemCount: songs.length,
-              itemBuilder: (ctx, idx) {
-                final entry = songs[idx];
+      body: ListView.builder(
+        padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 16),
+        itemCount: songs.length + 1,
+        itemBuilder: (ctx, idx) {
+          if (idx == 0) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_playlist['type'] == 'offline')
+                  FutureBuilder<int>(
+                    future: OfflineStorage.getPlaylistDownloadSize(songs),
+                    builder: (context, snapshot) {
+                      final sizeStr = snapshot.connectionState == ConnectionState.waiting
+                          ? "Calculating size..."
+                          : OfflineStorage.formatBytes(snapshot.data ?? 0);
+                      return _buildPlaylistHeader(
+                        name: _playlist['name'] ?? '',
+                        songs: songs,
+                        extraInfo: sizeStr,
+                      );
+                    },
+                  )
+                else
+                  _buildPlaylistHeader(
+                    name: _playlist['name'] ?? '',
+                    songs: songs,
+                  ),
+                if (songs.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 32.0),
+                    child: Center(
+                      child: Text('No songs in this playlist',
+                          style: TextStyle(color: Colors.white38)),
+                    ),
+                  ),
+              ],
+            );
+          }
+          final entry = songs[idx - 1];
                 final status = entry['status'] as String? ?? 'notDownloaded';
                 final progress = (entry['progress'] as num?)?.toDouble() ?? 0.0;
                 final songId = entry['song_id'] as int;
@@ -282,10 +301,108 @@ class _OfflinePlaylistScreenState
                        ],
                      ),
                    ),
-                 );
+                  );
 
               },
             ),
     );
+  }
+
+  Widget _buildPlaylistHeader({
+    required String name,
+    required List<Map<String, dynamic>> songs,
+    String? extraInfo,
+  }) {
+    final playerState = ref.watch(playerProvider);
+    final isShuffled = playerState.shuffle;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            name,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Text(
+                "${songs.length} song${songs.length == 1 ? '' : 's'}",
+                style: const TextStyle(color: Colors.white54, fontSize: 14),
+              ),
+              if (extraInfo != null && extraInfo.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                const Text("•", style: TextStyle(color: Colors.white30)),
+                const SizedBox(width: 8),
+                Text(
+                  extraInfo,
+                  style: const TextStyle(color: Color(0xFF10B981), fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              ElevatedButton.icon(
+                onPressed: songs.isEmpty ? null : _playAll,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF8B5CF6),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                ),
+                icon: const Icon(Icons.play_arrow_rounded, size: 22),
+                label: const Text("Play All", style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: songs.isEmpty ? null : _shufflePlay,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: isShuffled ? const Color(0xFF8B5CF6) : Colors.white,
+                  side: BorderSide(
+                    color: isShuffled ? const Color(0xFF8B5CF6) : Colors.white24,
+                    width: 1.5,
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                ),
+                icon: Icon(
+                  Icons.shuffle_rounded,
+                  color: isShuffled ? const Color(0xFF8B5CF6) : Colors.white70,
+                  size: 20,
+                ),
+                label: Text(
+                  "Shuffle",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isShuffled ? const Color(0xFF8B5CF6) : Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _playAll() {
+    final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
+    if (songs.isEmpty) return;
+    _playSong(songs.first);
+  }
+
+  void _shufflePlay() {
+    final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
+    if (songs.isEmpty) return;
+    final playlist = songs.map((s) => _buildSongMap(s)).toList();
+    ref.read(playerProvider.notifier).playPlaylistShuffled(playlist, _playlist['name'] ?? '');
   }
 }

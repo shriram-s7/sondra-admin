@@ -293,6 +293,28 @@ class OfflineStorage {
     }
   }
 
+  static Future<int> getPlaylistDownloadSize(List<dynamic> songs) async {
+    try {
+      final dPath = await OfflineStorage().downloadsDir;
+      final downloadDir = Directory(dPath);
+      if (!await downloadDir.exists()) return 0;
+      int total = 0;
+      for (final s in songs) {
+        if (s['status'] == 'completed') {
+          final songId = s['song_id'] ?? s['id'];
+          final file = File(p.join(dPath, '$songId.mp3'));
+          if (await file.exists()) {
+            total += await file.length();
+          }
+        }
+      }
+      return total;
+    } catch (e) {
+      print("Error getting playlist download size: $e");
+      return 0;
+    }
+  }
+
   static String formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
