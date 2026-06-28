@@ -292,6 +292,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     state = state.copyWith(queue: updatedQueue);
   }
 
+  void playNext(Map<String, dynamic> song) {
+    final updatedQueue = List<Map<String, dynamic>>.from(state.queue)..insert(0, song);
+    state = state.copyWith(queue: updatedQueue);
+  }
+
   void reorderQueue(int oldIndex, int newIndex) {
     final updatedQueue = List<Map<String, dynamic>>.from(state.queue);
     if (oldIndex < newIndex) {

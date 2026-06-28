@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/player_provider.dart';
 import '../widgets/song_cover.dart';
+import 'dart:io' show Platform;
+import '../widgets/song_options_menu.dart';
 
 class QueueScreen extends ConsumerWidget {
   const QueueScreen({super.key});
@@ -50,21 +52,29 @@ class QueueScreen extends ConsumerWidget {
               ),
             ),
             SliverToBoxAdapter(
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                leading: SongCoverWidget(
-                  song: currentSong,
-                  width: 48,
-                  height: 48,
-                  borderRadius: 6.0,
-                ),
-                title: Text(
-                  currentSong["title"] ?? "Unknown Track",
-                  style: const TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold),
-                ),
-                subtitle: Text(
-                  currentSong["artist"] ?? "Unknown Artist",
-                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+              child: GestureDetector(
+                onSecondaryTapDown: (details) {
+                  if (Platform.isWindows) {
+                    SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, currentSong);
+                  }
+                },
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  leading: SongCoverWidget(
+                    song: currentSong,
+                    width: 48,
+                    height: 48,
+                    borderRadius: 6.0,
+                  ),
+                  title: Text(
+                    currentSong["title"] ?? "Unknown Track",
+                    style: const TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    currentSong["artist"] ?? "Unknown Artist",
+                    style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  ),
+                  trailing: SongOptionsButton(song: currentSong),
                 ),
               ),
             ),
@@ -100,23 +110,37 @@ class QueueScreen extends ConsumerWidget {
                       padding: const EdgeInsets.only(right: 24),
                       child: const Icon(Icons.delete_rounded, color: Colors.redAccent),
                     ),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                      leading: SongCoverWidget(
-                        song: s,
-                        width: 44,
-                        height: 44,
-                        borderRadius: 6.0,
+                    child: GestureDetector(
+                      onSecondaryTapDown: (details) {
+                        if (Platform.isWindows) {
+                          SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, s, inQueue: true, queueIndex: index);
+                        }
+                      },
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                        leading: SongCoverWidget(
+                          song: s,
+                          width: 44,
+                          height: 44,
+                          borderRadius: 6.0,
+                        ),
+                        title: Text(
+                          s["title"] ?? "Unknown Track",
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+                        ),
+                        subtitle: Text(
+                          s["artist"] ?? "Unknown Artist",
+                          style: const TextStyle(color: Colors.white38, fontSize: 11),
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SongOptionsButton(song: s, inQueue: true, queueIndex: index),
+                            const SizedBox(width: 8),
+                            const Icon(Icons.drag_handle_rounded, color: Colors.white24),
+                          ],
+                        ),
                       ),
-                      title: Text(
-                        s["title"] ?? "Unknown Track",
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
-                      ),
-                      subtitle: Text(
-                        s["artist"] ?? "Unknown Artist",
-                        style: const TextStyle(color: Colors.white38, fontSize: 11),
-                      ),
-                      trailing: const Icon(Icons.drag_handle_rounded, color: Colors.white24),
                     ),
                   ),
                 );
@@ -136,21 +160,29 @@ class QueueScreen extends ConsumerWidget {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final s = remainingPlaylistSongs[index];
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                    leading: SongCoverWidget(
-                      song: s,
-                      width: 44,
-                      height: 44,
-                      borderRadius: 6.0,
-                    ),
-                    title: Text(
-                      s["title"] ?? "Unknown Track",
-                      style: const TextStyle(color: Colors.white60, fontSize: 14),
-                    ),
-                    subtitle: Text(
-                      s["artist"] ?? "Unknown Artist",
-                      style: const TextStyle(color: Colors.white38, fontSize: 11),
+                  return GestureDetector(
+                    onSecondaryTapDown: (details) {
+                      if (Platform.isWindows) {
+                        SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, s);
+                      }
+                    },
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                      leading: SongCoverWidget(
+                        song: s,
+                        width: 44,
+                        height: 44,
+                        borderRadius: 6.0,
+                      ),
+                      title: Text(
+                        s["title"] ?? "Unknown Track",
+                        style: const TextStyle(color: Colors.white60, fontSize: 14),
+                      ),
+                      subtitle: Text(
+                        s["artist"] ?? "Unknown Artist",
+                        style: const TextStyle(color: Colors.white38, fontSize: 11),
+                      ),
+                      trailing: SongOptionsButton(song: s),
                     ),
                   );
                 },

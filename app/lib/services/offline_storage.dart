@@ -61,11 +61,12 @@ class OfflineStorage {
     await file.writeAsString(jsonEncode(_playlists));
   }
 
-  Future<Map<String, dynamic>> createPlaylist(String name) async {
+  Future<Map<String, dynamic>> createPlaylist(String name, {String type = 'offline'}) async {
     final id = DateTime.now().millisecondsSinceEpoch;
     final entry = <String, dynamic>{
       'id': id,
       'name': name,
+      'type': type,
       'created_at': DateTime.now().toIso8601String(),
       'songs': <Map<String, dynamic>>[],
     };
@@ -75,12 +76,20 @@ class OfflineStorage {
   }
 
   List<Map<String, dynamic>> getPlaylists() {
-    return List.from(_playlists);
+    return List.from(_playlists.map((pl) => {
+      ...pl,
+      'type': pl['type'] ?? 'offline',
+    }));
   }
 
   Map<String, dynamic>? getPlaylist(int id) {
     final matches = _playlists.where((p) => p['id'] == id);
-    return matches.isNotEmpty ? Map<String, dynamic>.from(matches.first) : null;
+    if (matches.isEmpty) return null;
+    final pl = matches.first;
+    return {
+      ...pl,
+      'type': pl['type'] ?? 'offline',
+    };
   }
 
   Future<void> addSongsToPlaylist(int playlistId, List<Map<String, dynamic>> songs) async {

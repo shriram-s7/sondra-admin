@@ -56,7 +56,7 @@ class _CreateOfflinePlaylistScreenState
         _allSongs.where((s) => _selectedSongIds.contains(s['id'])).toList();
 
     final storage = OfflineStorage();
-    final playlist = await storage.createPlaylist(name);
+    final playlist = await storage.createPlaylist(name, type: 'offline');
     await storage.addSongsToPlaylist(playlist['id'] as int, selectedSongs);
 
     if (mounted) {

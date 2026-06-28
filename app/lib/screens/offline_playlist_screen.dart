@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/offline_storage.dart';
 import '../services/download_manager.dart';
 import '../providers/player_provider.dart';
 import '../widgets/song_cover.dart';
+import '../widgets/song_options_menu.dart';
 
 class OfflinePlaylistScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> playlist;
@@ -129,15 +131,19 @@ class _OfflinePlaylistScreenState
             : null,
         title: Row(
           children: [
-            const Icon(Icons.offline_pin_rounded,
-                color: Color(0xFF8B5CF6), size: 20),
+            Icon(
+                _playlist['type'] == 'personal'
+                    ? Icons.playlist_play_rounded
+                    : Icons.offline_pin_rounded,
+                color: const Color(0xFF8B5CF6),
+                size: 20),
             const SizedBox(width: 8),
             Text(_playlist['name'] ?? '',
                 style: const TextStyle(color: Colors.white)),
           ],
         ),
         actions: [
-          if (hasNotDownloaded)
+          if (hasNotDownloaded && _playlist['type'] != 'personal')
             IconButton(
               onPressed: hasPendingDownloads ? null : _downloadAll,
               icon: hasPendingDownloads
@@ -174,130 +180,117 @@ class _OfflinePlaylistScreenState
                 final songId = entry['song_id'] as int;
                 final isCurrent = playerState.currentSong?['id'] == songId;
 
-                return ListTile(
-                  onTap: () => _playSong(entry),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  leading: Stack(
-                    children: [
-                      SongCoverWidget(
-                        song: _buildSongMap(entry),
-                        width: 48,
-                        height: 48,
-                        borderRadius: 6.0,
-                      ),
-                      if (status == 'completed')
-                        Positioned(
-                          bottom: 0,
-                          right: 0,
-                          child: Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF10B981),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.check,
-                                size: 12, color: Colors.white),
-                          ),
-                        ),
-                      if (status == 'notDownloaded')
-                        Positioned(
-                          bottom: 0,
-                          right: 0,
-                          child: Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.cloud_outlined,
-                                size: 12, color: Colors.white54),
-                          ),
-                        ),
-                    ],
-                  ),
-                  title: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          entry['title'] ?? 'Unknown Track',
-                          style: TextStyle(
-                            color: isCurrent
-                                ? const Color(0xFF8B5CF6)
-                                : Colors.white,
-                            fontWeight: isCurrent
-                                ? FontWeight.bold
-                                : FontWeight.w500,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        entry['artist'] ?? 'Unknown Artist',
-                        style: const TextStyle(
-                            color: Colors.white38, fontSize: 12),
-                      ),
-                      if (status == 'downloading') ...[
-                        const SizedBox(height: 4),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(2),
-                          child: LinearProgressIndicator(
-                            value: progress,
-                            backgroundColor: Colors.white.withOpacity(0.1),
-                            valueColor: const AlwaysStoppedAnimation<Color>(
-                                Color(0xFF8B5CF6)),
-                            minHeight: 3,
-                          ),
-                        ),
-                        Text(
-                          '${(progress * 100).toStringAsFixed(0)}%',
-                          style: const TextStyle(
-                              color: Color(0xFF8B5CF6), fontSize: 10),
-                        ),
-                      ],
-                    ],
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (status == 'notDownloaded')
-                        IconButton(
-                          onPressed: () => _downloadSong(entry),
-                          icon: const Icon(Icons.cloud_download_rounded,
-                              color: Colors.white38, size: 20),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                      if (status == 'completed')
-                        IconButton(
-                          onPressed: () => _deleteSongFile(entry),
-                          icon: const Icon(Icons.delete_outline,
-                              color: Colors.white24, size: 18),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          tooltip: 'Delete download',
-                        ),
-                      if (status == 'downloading')
-                        const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Color(0xFF8B5CF6)),
-                        ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${(entry['duration_seconds'] ?? 0) ~/ 60}:${((entry['duration_seconds'] ?? 0) % 60).toString().padLeft(2, '0')}',
-                        style:
-                            const TextStyle(color: Colors.white30, fontSize: 11),
-                      ),
-                    ],
-                  ),
-                );
+                 return GestureDetector(
+                   onSecondaryTapDown: (details) {
+                     if (Platform.isWindows) {
+                       SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, _buildSongMap(entry));
+                     }
+                   },
+                   child: ListTile(
+                     onTap: () => _playSong(entry),
+                     contentPadding:
+                         const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                     leading: Stack(
+                       children: [
+                         SongCoverWidget(
+                           song: _buildSongMap(entry),
+                           width: 48,
+                           height: 48,
+                           borderRadius: 6.0,
+                         ),
+                         if (status == 'completed')
+                           Positioned(
+                             bottom: 0,
+                             right: 0,
+                             child: Container(
+                               padding: const EdgeInsets.all(2),
+                               decoration: const BoxDecoration(
+                                 color: Color(0xFF10B981),
+                                 shape: BoxShape.circle,
+                               ),
+                               child: const Icon(Icons.check,
+                                   size: 12, color: Colors.white),
+                             ),
+                           ),
+                         if (status == 'notDownloaded')
+                           Positioned(
+                             bottom: 0,
+                             right: 0,
+                             child: Container(
+                               padding: const EdgeInsets.all(2),
+                               decoration: BoxDecoration(
+                                 color: Colors.white.withOpacity(0.2),
+                                 shape: BoxShape.circle,
+                               ),
+                               child: const Icon(Icons.cloud_outlined,
+                                   size: 12, color: Colors.white54),
+                             ),
+                           ),
+                       ],
+                     ),
+                     title: Row(
+                       children: [
+                         Expanded(
+                           child: Text(
+                             entry['title'] ?? 'Unknown Track',
+                             style: TextStyle(
+                               color: isCurrent
+                                   ? const Color(0xFF8B5CF6)
+                                   : Colors.white,
+                               fontWeight: isCurrent
+                                   ? FontWeight.bold
+                                   : FontWeight.w500,
+                             ),
+                             overflow: TextOverflow.ellipsis,
+                           ),
+                         ),
+                       ],
+                     ),
+                     subtitle: Column(
+                       crossAxisAlignment: CrossAxisAlignment.start,
+                       children: [
+                         Text(
+                           entry['artist'] ?? 'Unknown Artist',
+                           style: const TextStyle(
+                               color: Colors.white38, fontSize: 12),
+                         ),
+                         if (status == 'downloading') ...[
+                           const SizedBox(height: 4),
+                           ClipRRect(
+                             borderRadius: BorderRadius.circular(2),
+                             child: LinearProgressIndicator(
+                               value: progress,
+                               backgroundColor: Colors.white.withOpacity(0.1),
+                               valueColor: const AlwaysStoppedAnimation<Color>(
+                                   Color(0xFF8B5CF6)),
+                               minHeight: 3,
+                             ),
+                           ),
+                           Text(
+                             '${(progress * 100).toStringAsFixed(0)}%',
+                             style: const TextStyle(
+                                 color: Color(0xFF8B5CF6), fontSize: 10),
+                           ),
+                         ],
+                       ],
+                     ),
+                     trailing: Row(
+                       mainAxisSize: MainAxisSize.min,
+                       children: [
+                         if (isCurrent && playerState.isPlaying)
+                           const Icon(Icons.equalizer_rounded, color: Color(0xFF8B5CF6), size: 20)
+                         else
+                           Text(
+                             "${(entry["duration_seconds"] ?? 0) ~/ 60}:${((entry["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
+                             style: const TextStyle(color: Colors.white30, fontSize: 11),
+                           ),
+                         const SizedBox(width: 4),
+                         SongOptionsButton(song: _buildSongMap(entry)),
+                       ],
+                     ),
+                   ),
+                 );
+
               },
             ),
     );
