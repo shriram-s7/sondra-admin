@@ -260,7 +260,7 @@ class PlayerState {
     this.originalPlaylist = const [],
     this.activePlaylist = const [],
     this.queue = const [],
-    this.activePlaylistName = "Music Library",
+    this.activePlaylistName = "Song Pool",
   });
 
   PlayerState copyWith({
@@ -339,10 +339,23 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     });
 
     // Register Media / Earbud skip controls callback from background handler
+    // CHANGE 5: 600ms debounce prevents double-tap earbud from firing twice
     globalAudioHandler.onSkipToNext = () async {
+      final now = DateTime.now();
+      if (_lastActionTime != null &&
+          now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
+        return;
+      }
+      _lastActionTime = now;
       handleNext();
     };
     globalAudioHandler.onSkipToPrevious = () async {
+      final now = DateTime.now();
+      if (_lastActionTime != null &&
+          now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
+        return;
+      }
+      _lastActionTime = now;
       handlePrev();
     };
   }
@@ -378,11 +391,14 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         newActive.insert(0, song);
       }
 
+      // CHANGE 6: Set playlist/buffering state BEFORE load but do NOT set currentSong yet.
+      // currentSong is updated AFTER playUri() succeeds so the banner always matches
+      // the song that is actually playing, not a song that is still loading.
+      final resolvedPlaylistName = playlistName ?? (isNewQueue ? "Song Pool" : state.activePlaylistName);
       state = state.copyWith(
-        currentSong: song,
         originalPlaylist: newOriginal,
         activePlaylist: newActive,
-        activePlaylistName: playlistName ?? (isNewQueue ? "Music Library" : state.activePlaylistName),
+        activePlaylistName: resolvedPlaylistName,
         position: startSeconds != null ? Duration(seconds: startSeconds) : Duration.zero,
         isBuffering: true,
       );
@@ -407,7 +423,13 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         );
 
         await globalAudioHandler.playUri(directUrl, mediaItem);
-        
+
+        // CHANGE 6: Only now that playUri() has succeeded do we update the banner song.
+        state = state.copyWith(
+          currentSong: song,
+          isBuffering: false,
+        );
+
         if (startSeconds != null) {
           await globalAudioHandler.seek(Duration(seconds: startSeconds));
         }
