@@ -23,6 +23,7 @@ class _CreateOfflinePlaylistScreenState
   @override
   void initState() {
     super.initState();
+    _nameController.addListener(() => setState(() {}));
     _loadSongs();
   }
 
