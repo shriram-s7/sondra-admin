@@ -1,0 +1,165 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/player_provider.dart';
+import '../widgets/song_cover.dart';
+
+class QueueScreen extends ConsumerWidget {
+  const QueueScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final playerState = ref.watch(playerProvider);
+    final notifier = ref.read(playerProvider.notifier);
+
+    final currentSong = playerState.currentSong;
+    final manualQueue = playerState.queue;
+
+    // Calculate the remaining songs in the playlist that will play next
+    final remainingPlaylistSongs = <Map<String, dynamic>>[];
+    if (currentSong != null && playerState.activePlaylist.isNotEmpty) {
+      final currentIdx = playerState.activePlaylist.indexWhere((s) => s["id"] == currentSong["id"]);
+      if (currentIdx != -1) {
+        for (int i = currentIdx + 1; i < playerState.activePlaylist.length; i++) {
+          remainingPlaylistSongs.add(playerState.activePlaylist[i]);
+        }
+      }
+    }
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF08070D),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF111019),
+        foregroundColor: Colors.white,
+        title: const Text("Play Queue", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        actions: [
+          if (manualQueue.isNotEmpty)
+            TextButton(
+              onPressed: () => notifier.clearQueue(),
+              child: const Text("Clear Queue", style: TextStyle(color: Color(0xFF8B5CF6))),
+            ),
+        ],
+      ),
+      body: CustomScrollView(
+        slivers: [
+          // Section 1: Now Playing
+          if (currentSong != null) ...[
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.only(left: 16.0, right: 16.0, top: 16.0, bottom: 8.0),
+                child: Text("Now playing", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                leading: SongCoverWidget(
+                  song: currentSong,
+                  width: 48,
+                  height: 48,
+                  borderRadius: 6.0,
+                ),
+                title: Text(
+                  currentSong["title"] ?? "Unknown Track",
+                  style: const TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  currentSong["artist"] ?? "Unknown Artist",
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+              ),
+            ),
+          ],
+
+          // Section 2: Next In Queue (Manually added - Drag and Drop + Swipe to remove)
+          if (manualQueue.isNotEmpty) ...[
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.only(left: 16.0, right: 16.0, top: 24.0, bottom: 8.0),
+                child: Text("Next in Queue", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            SliverReorderableList(
+              itemCount: manualQueue.length,
+              onReorder: (oldIndex, newIndex) {
+                notifier.reorderQueue(oldIndex, newIndex);
+              },
+              itemBuilder: (context, index) {
+                final s = manualQueue[index];
+                return ReorderableDelayedDragStartListener(
+                  key: ValueKey("queue_${s['id']}_$index"),
+                  index: index,
+                  child: Dismissible(
+                    key: ValueKey("dismiss_${s['id']}_$index"),
+                    direction: DismissDirection.endToStart,
+                    onDismissed: (_) {
+                      notifier.removeFromQueue(index);
+                    },
+                    background: Container(
+                      color: Colors.redAccent.withOpacity(0.2),
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 24),
+                      child: const Icon(Icons.delete_rounded, color: Colors.redAccent),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                      leading: SongCoverWidget(
+                        song: s,
+                        width: 44,
+                        height: 44,
+                        borderRadius: 6.0,
+                      ),
+                      title: Text(
+                        s["title"] ?? "Unknown Track",
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+                      ),
+                      subtitle: Text(
+                        s["artist"] ?? "Unknown Artist",
+                        style: const TextStyle(color: Colors.white38, fontSize: 11),
+                      ),
+                      trailing: const Icon(Icons.drag_handle_rounded, color: Colors.white24),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+
+          // Section 3: Next Up (Remaining songs from active playlist)
+          if (remainingPlaylistSongs.isNotEmpty) ...[
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.only(left: 16.0, right: 16.0, top: 24.0, bottom: 8.0),
+                child: Text("Next up from active list", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final s = remainingPlaylistSongs[index];
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    leading: SongCoverWidget(
+                      song: s,
+                      width: 44,
+                      height: 44,
+                      borderRadius: 6.0,
+                    ),
+                    title: Text(
+                      s["title"] ?? "Unknown Track",
+                      style: const TextStyle(color: Colors.white60, fontSize: 14),
+                    ),
+                    subtitle: Text(
+                      s["artist"] ?? "Unknown Artist",
+                      style: const TextStyle(color: Colors.white38, fontSize: 11),
+                    ),
+                  );
+                },
+                childCount: remainingPlaylistSongs.length,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}

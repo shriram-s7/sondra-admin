@@ -32,22 +32,16 @@ class ApiService {
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
-    baseUrl = prefs.getString("sondra_server_url");
+    baseUrl = "https://sondra-backend.onrender.com";
     token = prefs.getString("sondra_token");
-    if (baseUrl != null) {
-      dio.options.baseUrl = baseUrl!;
-      if (token != null) {
-        startSseConnection();
-      }
+    dio.options.baseUrl = baseUrl!;
+    if (token != null) {
+      startSseConnection();
     }
   }
 
-  Future<bool> login(String serverUrl, String username, String password) async {
-    // Format URL
-    String cleanUrl = serverUrl.trim();
-    if (cleanUrl.endsWith("/")) {
-      cleanUrl = cleanUrl.substring(0, cleanUrl.length - 1);
-    }
+  Future<bool> login(String username, String password) async {
+    String cleanUrl = "https://sondra-backend.onrender.com";
     
     try {
       final response = await dio.post(
@@ -157,5 +151,18 @@ class ApiService {
   Future<String> getDirectStreamUrl(int songId) async {
     final res = await dio.get("/api/stream/$songId");
     return res.data["stream_url"];
+  }
+
+  Future<String> getDownloadUrl(int songId) async {
+    return "$baseUrl/api/stream/$songId/proxy?token=$token";
+  }
+
+  Future<void> triggerSync() async {
+    await dio.post("/api/sync");
+  }
+
+  Future<Map<String, dynamic>> getSyncStatus() async {
+    final res = await dio.get("/api/sync/status");
+    return Map<String, dynamic>.from(res.data);
   }
 }

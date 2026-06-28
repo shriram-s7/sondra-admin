@@ -10,14 +10,11 @@ import {
   Music, 
   LayoutDashboard, 
   LogOut, 
-  RefreshCw, 
-  CheckCircle2,
   ListMusic,
-  Clock,
   Settings as SettingsIcon,
-  Database,
   Edit2,
-  X
+  X,
+  Clock
 } from "lucide-react";
 import api from "./api";
 import "./App.css";
@@ -50,28 +47,83 @@ interface Song {
   } | null;
 }
 
+const getSeededColors = (title: string) => {
+  const songTitle = title || "";
+  let hash = 0;
+  for (let i = 0; i < songTitle.length; i++) {
+    hash = songTitle.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  
+  const palettes = [
+    ["#F43F5E", "#FB7185"], // Rose
+    ["#EC4899", "#F472B6"], // Pink
+    ["#D946EF", "#E879F9"], // Fuchsia
+    ["#A855F7", "#C084FC"], // Purple
+    ["#8B5CF6", "#A78BFA"], // Violet
+    ["#6366F1", "#818CF8"], // Indigo
+    ["#3B82F6", "#60A5FA"], // Blue
+    ["#0EA5E9", "#38BDF8"], // Light Blue
+    ["#06B6D4", "#22D3EE"], // Cyan
+    ["#14B8A6", "#2DD4BF"], // Teal
+    ["#10B981", "#34D399"], // Emerald
+    ["#22C55E", "#4ADE80"], // Green
+    ["#EAB308", "#FACC15"], // Yellow
+    ["#F97316", "#FB923C"], // Orange
+    ["#EF4444", "#F87171"], // Red
+  ];
+  
+  const index = Math.abs(hash) % palettes.length;
+  return palettes[index];
+};
 
-interface SyncStatus {
-  last_sync: string | null;
-  total_songs: number;
-  total_playlists: number;
-  is_syncing: boolean;
-  sync_interval_seconds: number;
-  gdrive_root_folder_id: string;
-}
+const SongCover = ({ song, size = "40px", fontSize = "14px" }: { song: Song; size?: string; fontSize?: string }) => {
+  const [hasError, setHasError] = useState(false);
+  const title = song.title || "Unknown";
+  const initial = title.charAt(0).toUpperCase() || "♫";
 
-interface SyncLogEntry {
-  timestamp: string;
-  songs_added: number;
-  songs_removed: number;
-  errors: string;
-}
+  const apiBase = import.meta.env.VITE_API_URL || "";
+  const cleanApiBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
+  const coverUrl = song.cover_url || `${cleanApiBase}/api/songs/${song.id}/cover`;
 
-interface ToastMessage {
-  id: string;
-  message: string;
-  type: "success" | "info" | "error";
-}
+  if (hasError || !song.cover_url) {
+    const colors = getSeededColors(title);
+    return (
+      <div 
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "6px",
+          background: `linear-gradient(135deg, ${colors[0]}, ${colors[1]})`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#ffffff",
+          fontWeight: "bold",
+          fontSize: fontSize,
+          textShadow: "1px 2px 4px rgba(0,0,0,0.35)",
+          flexShrink: 0,
+        }}
+      >
+        {initial}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={coverUrl}
+      onError={() => setHasError(true)}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "6px",
+        objectFit: "cover",
+        flexShrink: 0,
+      }}
+      alt=""
+    />
+  );
+};
 
 function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem("sondra_token"));
@@ -81,22 +133,12 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
 
   // Navigation state
-  const [activeTab, setActiveTab] = useState<"dashboard" | "library" | "playlists" | "sync" | "settings">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "library" | "playlists" | "settings">("dashboard");
   
   // Data lists
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [songs, setSongs] = useState<Song[]>([]);
   const [filteredSongs, setFilteredSongs] = useState<Song[]>([]);
-
-  const [syncLogs, setSyncLogs] = useState<SyncLogEntry[]>([]);
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>({
-    last_sync: null,
-    total_songs: 0,
-    total_playlists: 0,
-    is_syncing: false,
-    sync_interval_seconds: 30,
-    gdrive_root_folder_id: ""
-  });
 
   // Search & Modals
   const [searchQuery, setSearchQuery] = useState("");
@@ -113,12 +155,6 @@ function App() {
   const [passwordError, setPasswordError] = useState("");
   const [passwordSuccess, setPasswordSuccess] = useState("");
 
-  // Countdown timer
-  const [nextSyncSeconds, setNextSyncSeconds] = useState<number | null>(null);
-
-  // Toasts
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
-
   // Persistent Player states
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -129,15 +165,21 @@ function App() {
   const [shuffle] = useState(false);
   const [repeat] = useState<"none" | "one" | "all">("none");
   const [activePlaylistSongs, setActivePlaylistSongs] = useState<Song[]>([]);
+  const [songQueue, setSongQueue] = useState<Song[]>([]);
+  const [showQueue, setShowQueue] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const addToast = (message: string, type: "success" | "info" | "error" = "success") => {
-    const id = Date.now().toString();
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
+  const addToQueue = (song: Song) => {
+    setSongQueue((prev) => [...prev, song]);
+  };
+
+  const removeFromQueue = (index: number) => {
+    setSongQueue((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const clearQueue = () => {
+    setSongQueue([]);
   };
 
   // Auth Handling
@@ -150,11 +192,9 @@ function App() {
       const { access_token } = response.data;
       localStorage.setItem("sondra_token", access_token);
       setToken(access_token);
-      addToast("Log in successful!");
     } catch (err: any) {
       const errorMsg = err.response?.data?.error || "Invalid credentials.";
       setLoginError(errorMsg);
-      addToast(errorMsg, "error");
     } finally {
       setIsLoading(false);
     }
@@ -168,35 +208,22 @@ function App() {
     if (audioRef.current) {
       audioRef.current.pause();
     }
-    addToast("Logged out successfully.");
   };
 
   // Load Library Data
   const loadLibraryData = async () => {
     try {
-      const [playlistsRes, songsRes, syncRes, logsRes] = await Promise.all([
+      const [playlistsRes, songsRes] = await Promise.all([
         api.get("/api/playlists"),
         api.get("/api/songs"),
-        api.get("/api/sync/status"),
-        api.get("/api/sync/logs").catch(() => ({ data: [] }))
       ]);
 
       setPlaylists(playlistsRes.data);
       setSongs(songsRes.data);
       setFilteredSongs(songsRes.data);
-      setSyncStatus(syncRes.data);
-      setSyncLogs(logsRes.data);
-
-      if (syncRes.data.last_sync) {
-        resetSyncCountdown(syncRes.data.sync_interval_seconds);
-      }
     } catch (err: any) {
       console.error("Error loading library data:", err);
     }
-  };
-
-  const resetSyncCountdown = (interval: number) => {
-    setNextSyncSeconds(interval);
   };
 
   useEffect(() => {
@@ -205,31 +232,10 @@ function App() {
     }
   }, [token]);
 
-  // Countdown timer clock ticking
-  useEffect(() => {
-    if (!token) return;
-    if (syncStatus.is_syncing) {
-      setNextSyncSeconds(null);
-      return;
-    }
-
-    const timer = setInterval(() => {
-      setNextSyncSeconds((prev) => {
-        if (prev === null || prev <= 1) {
-          return syncStatus.sync_interval_seconds;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [token, syncStatus.is_syncing, syncStatus.sync_interval_seconds]);
-
-  // SSE Broadcast alerts
+  // SSE Broadcast alerts — silently reloads library data on backend updates
   useEffect(() => {
     if (!token) return;
 
-    // Connect to global SSE events feed (resolve base URL from env)
     const apiBase = import.meta.env.VITE_API_URL || "";
     const cleanApiBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
     const eventSource = new EventSource(`${cleanApiBase}/api/events?token=${token}`);
@@ -238,8 +244,6 @@ function App() {
       try {
         const data = JSON.parse(event.data);
         if (data.type === "library_updated") {
-          console.log("SSE: Library updated!");
-          addToast("Music Library updated!", "success");
           loadLibraryData();
         }
       } catch (err) {
@@ -255,29 +259,6 @@ function App() {
       eventSource.close();
     };
   }, [token]);
-
-  // Sync Poll loop (active when syncing)
-  useEffect(() => {
-    if (!token) return;
-    if (!syncStatus.is_syncing) return;
-
-    const checkStatus = async () => {
-      try {
-        const res = await api.get("/api/sync/status");
-        setSyncStatus(res.data);
-        if (!res.data.is_syncing) {
-          // Finished syncing
-          loadLibraryData();
-          addToast("Sync complete.");
-        }
-      } catch (err) {
-        console.error("Sync poll error:", err);
-      }
-    };
-
-    const interval = setInterval(checkStatus, 2000);
-    return () => clearInterval(interval);
-  }, [token, syncStatus.is_syncing]);
 
   // Handle Search Filtering
   useEffect(() => {
@@ -300,19 +281,6 @@ function App() {
     return () => clearTimeout(timeout);
   }, [searchQuery, songs, token]);
 
-  // Manual sync trigger
-  const triggerSync = async () => {
-    if (syncStatus.is_syncing) return;
-    try {
-      setSyncStatus((prev) => ({ ...prev, is_syncing: true }));
-      await api.post("/api/sync");
-      addToast("Sync process started...", "info");
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.error || "Failed to trigger sync.";
-      addToast(errorMsg, "error");
-    }
-  };
-
   // PATCH Password
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -324,13 +292,11 @@ function App() {
         new_password: newPassword,
       });
       setPasswordSuccess("Password changed successfully!");
-      addToast("Password changed successfully!");
       setCurrentPassword("");
       setNewPassword("");
     } catch (err: any) {
       const errorMsg = err.response?.data?.error || "Failed to change password.";
       setPasswordError(errorMsg);
-      addToast(errorMsg, "error");
     }
   };
 
@@ -364,10 +330,9 @@ function App() {
       }
 
       setEditingSong(null);
-      addToast("Song metadata updated!");
     } catch (err: any) {
       const errorMsg = err.response?.data?.error || "Failed to update metadata.";
-      addToast(errorMsg, "error");
+      console.error(errorMsg);
     }
   };
 
@@ -409,6 +374,13 @@ function App() {
   };
 
   const handleNextSong = () => {
+    if (songQueue.length > 0) {
+      const next = songQueue[0];
+      setSongQueue((prev) => prev.slice(1));
+      handlePlaySong(next, activePlaylistSongs);
+      return;
+    }
+
     if (activePlaylistSongs.length === 0) return;
     const currentIndex = activePlaylistSongs.findIndex((s) => s.id === currentSong?.id);
     let nextIndex = 0;
@@ -526,15 +498,6 @@ function App() {
 
   return (
     <div className="app-container">
-      {/* Dynamic Toast notifications overlay */}
-      <div className="toast-container">
-        {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.type}`}>
-            <span style={{ fontSize: "14px", fontWeight: 500 }}>{t.message}</span>
-          </div>
-        ))}
-      </div>
-
       <audio
         ref={audioRef}
         onTimeUpdate={onTimeUpdate}
@@ -577,13 +540,6 @@ function App() {
             Playlists
           </button>
           <button
-            className={`nav-item ${activeTab === "sync" ? "active" : ""}`}
-            onClick={() => setActiveTab("sync")}
-          >
-            <Database size={18} />
-            Sync Logs
-          </button>
-          <button
             className={`nav-item ${activeTab === "settings" ? "active" : ""}`}
             onClick={() => setActiveTab("settings")}
           >
@@ -592,18 +548,7 @@ function App() {
           </button>
         </nav>
 
-        {/* Sidebar Sync Status */}
-        <div className="sidebar-sync-box" style={{ marginTop: "auto", padding: "12px", background: "rgba(255,255,255,0.02)", borderRadius: "8px", border: "1px solid var(--border-glass)" }}>
-          <div className="flex-center" style={{ justifyContent: "space-between", marginBottom: "4px" }}>
-            <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Status</span>
-            <span className={`sync-dot ${syncStatus.is_syncing ? "syncing" : "idle"}`} />
-          </div>
-          <div style={{ fontSize: "13px", fontWeight: 600 }}>
-            {syncStatus.is_syncing ? "Syncing..." : "Idle"}
-          </div>
-        </div>
-
-        <button className="nav-item" onClick={handleLogout} style={{ marginTop: "12px", color: "var(--color-danger)" }}>
+        <button className="nav-item" onClick={handleLogout} style={{ marginTop: "auto", color: "var(--color-danger)" }}>
           <LogOut size={18} />
           Logout
         </button>
@@ -616,7 +561,6 @@ function App() {
             {activeTab === "dashboard" && "Dashboard"}
             {activeTab === "library" && "Music Library"}
             {activeTab === "playlists" && "Playlists"}
-            {activeTab === "sync" && "Sync Daemon Logs"}
             {activeTab === "settings" && "Platform Settings"}
           </h2>
           <div className="user-profile">
@@ -635,7 +579,7 @@ function App() {
                     <Music size={24} />
                   </div>
                   <div>
-                    <div className="stat-value">{syncStatus.total_songs}</div>
+                    <div className="stat-value">{songs.length}</div>
                     <div className="stat-label">Total Songs</div>
                   </div>
                 </div>
@@ -645,69 +589,11 @@ function App() {
                     <ListMusic size={24} />
                   </div>
                   <div>
-                    <div className="stat-value">{syncStatus.total_playlists}</div>
+                    <div className="stat-value">{playlists.length}</div>
                     <div className="stat-label">Total Playlists</div>
                   </div>
                 </div>
 
-                <div className="glass-card stat-card">
-                  <div className="stat-icon flex-center">
-                    <CheckCircle2 size={24} />
-                  </div>
-                  <div>
-                    <div className="stat-value" style={{ fontSize: "14px", marginTop: "12px" }}>
-                      {syncStatus.last_sync ? new Date(syncStatus.last_sync).toLocaleTimeString() : "Never"}
-                    </div>
-                    <div className="stat-label">Last Sync</div>
-                  </div>
-                </div>
-
-                <div className="glass-card stat-card">
-                  <div className="stat-icon flex-center">
-                    <RefreshCw size={24} className={syncStatus.is_syncing ? "spin-slow" : ""} />
-                  </div>
-                  <div>
-                    <div className="stat-value" style={{ fontSize: "20px" }}>
-                      {syncStatus.is_syncing ? "Syncing..." : `${nextSyncSeconds}s`}
-                    </div>
-                    <div className="stat-label">Next Sync In</div>
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "32px" }}>
-                <div className="glass-card" style={{ padding: "28px" }}>
-                  <h3 style={{ fontSize: "18px", marginBottom: "12px" }}>Sync Administration</h3>
-                  <p style={{ color: "var(--text-secondary)", fontSize: "14px", marginBottom: "20px" }}>
-                    Manually scan connected Google Drive playlists folders. Automatic scans complete periodically inside uvicorn lifespan loops.
-                  </p>
-                  <button
-                    onClick={triggerSync}
-                    className="btn-primary flex-center"
-                    style={{ gap: "10px", width: "100%", padding: "12px" }}
-                    disabled={syncStatus.is_syncing}
-                  >
-                    <RefreshCw size={16} className={syncStatus.is_syncing ? "spin-slow" : ""} />
-                    {syncStatus.is_syncing ? "Synchronizing..." : "Sync Now"}
-                  </button>
-                </div>
-
-                {/* Info Card */}
-                <div className="glass-card" style={{ padding: "28px" }}>
-                  <h3 style={{ fontSize: "18px", marginBottom: "12px" }}>Platform Context</h3>
-                  <div style={{ display: "flex", flexDirection: "column", gap: "12px", fontSize: "14px" }}>
-                    <div>
-                      <span style={{ color: "var(--text-muted)" }}>Connected Folder ID:</span>
-                      <div style={{ fontSize: "12px", fontFamily: "monospace", background: "rgba(0,0,0,0.2)", padding: "8px", borderRadius: "4px", marginTop: "4px", overflowX: "auto" }}>
-                        {syncStatus.gdrive_root_folder_id}
-                      </div>
-                    </div>
-                    <div>
-                      <span style={{ color: "var(--text-muted)" }}>Daemon Interval:</span>
-                      <strong style={{ marginLeft: "8px" }}>{syncStatus.sync_interval_seconds} seconds</strong>
-                    </div>
-                  </div>
-                </div>
               </div>
             </div>
           )}
@@ -744,14 +630,7 @@ function App() {
                       <tr key={song.id} className="song-row">
                         <td onClick={() => handlePlaySong(song, filteredSongs)}>
                           <div className="song-info-cell">
-                            <img
-                              src={song.cover_url || ""}
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).src = `/api/songs/${song.id}/cover`;
-                              }}
-                              className="song-cover-thumb"
-                              alt=""
-                            />
+                            <SongCover song={song} size="40px" fontSize="14px" />
                             <span className="song-title">{song.title}</span>
                           </div>
                         </td>
@@ -770,20 +649,30 @@ function App() {
                           <span className="song-duration">{formatTime(song.duration_seconds)}</span>
                         </td>
                         <td>
-                          <button
-                            onClick={() => handleOpenEditModal(song)}
-                            className="edit-metadata-btn flex-center"
-                            style={{ color: "var(--text-muted)", padding: "6px" }}
-                          >
-                            <Edit2 size={14} />
-                          </button>
+                          <div className="flex-center" style={{ gap: "8px" }}>
+                            <button
+                              onClick={() => addToQueue(song)}
+                              className="edit-metadata-btn flex-center"
+                              style={{ color: "var(--color-primary)", padding: "6px" }}
+                              title="Add to Queue"
+                            >
+                              <ListMusic size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleOpenEditModal(song)}
+                              className="edit-metadata-btn flex-center"
+                              style={{ color: "var(--text-muted)", padding: "6px" }}
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
                     {filteredSongs.length === 0 && (
                       <tr>
                         <td colSpan={6} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
-                          No songs found. Create folders in Google Drive and sync.
+                          No songs found. Add music folders in Google Drive to populate the library.
                         </td>
                       </tr>
                     )}
@@ -796,13 +685,6 @@ function App() {
           {/* Playlists Tab */}
           {activeTab === "playlists" && (
             <div>
-              {/* Playlists Help Banner */}
-              <div className="glass-card" style={{ padding: "20px", marginBottom: "28px", borderLeft: "4px solid var(--color-primary)" }}>
-                <span style={{ fontSize: "14px", fontWeight: 500 }}>
-                  💡 **Manage Playlists:** Playlists are managed by creating or deleting subfolders inside the `MUSIC ALL` folder in Google Drive. Sync to reflect changes.
-                </span>
-              </div>
-
               {!expandedPlaylist ? (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "24px" }}>
                   {playlists.map((playlist) => (
@@ -835,7 +717,7 @@ function App() {
                     </div>
                   ))}
                   {playlists.length === 0 && (
-                    <div style={{ color: "var(--text-muted)" }}>No synced playlists found.</div>
+                    <div style={{ color: "var(--text-muted)" }}>No playlists found. Add folders in Google Drive to get started.</div>
                   )}
                 </div>
               ) : (
@@ -877,77 +759,6 @@ function App() {
             </div>
           )}
 
-          {/* Sync Logs Tab */}
-          {activeTab === "sync" && (
-            <div>
-              <div className="stats-grid" style={{ marginBottom: "28px" }}>
-                <div className="glass-card stat-card">
-                  <div className="stat-icon flex-center">
-                    <Database size={24} />
-                  </div>
-                  <div>
-                    <div className="stat-value">{syncStatus.sync_interval_seconds}s</div>
-                    <div className="stat-label">Sync Interval</div>
-                  </div>
-                </div>
-                <div className="glass-card stat-card">
-                  <div className="stat-icon flex-center">
-                    <CheckCircle2 size={24} />
-                  </div>
-                  <div>
-                    <div className="stat-value" style={{ fontSize: "14px", marginTop: "12px" }}>
-                      {syncStatus.last_sync ? new Date(syncStatus.last_sync).toLocaleString() : "Never"}
-                    </div>
-                    <div className="stat-label">Last Sync Completed</div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="glass-card" style={{ padding: "24px" }}>
-                <div className="flex-center" style={{ justifyContent: "space-between", marginBottom: "20px" }}>
-                  <h3 style={{ fontSize: "18px" }}>Latest 10 Sync Results</h3>
-                  <button onClick={triggerSync} className="btn-primary" disabled={syncStatus.is_syncing}>
-                    Sync Now
-                  </button>
-                </div>
-
-                <table className="song-table">
-                  <thead>
-                    <tr>
-                      <th>Timestamp</th>
-                      <th>Songs Added</th>
-                      <th>Songs Removed</th>
-                      <th>Errors / Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {syncLogs.map((log, idx) => (
-                      <tr key={idx}>
-                        <td>{new Date(log.timestamp).toLocaleString()}</td>
-                        <td style={{ color: log.songs_added > 0 ? "var(--color-success)" : "inherit" }}>
-                          +{log.songs_added}
-                        </td>
-                        <td style={{ color: log.songs_removed > 0 ? "var(--color-danger)" : "inherit" }}>
-                          -{log.songs_removed}
-                        </td>
-                        <td style={{ color: log.errors !== "None" ? "var(--color-danger)" : "var(--color-success)" }}>
-                          {log.errors}
-                        </td>
-                      </tr>
-                    ))}
-                    {syncLogs.length === 0 && (
-                      <tr>
-                        <td colSpan={4} style={{ textAlign: "center", padding: "20px", color: "var(--text-muted)" }}>
-                          No synchronization logs recorded.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
           {/* Settings Tab */}
           {activeTab === "settings" && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "32px" }}>
@@ -986,24 +797,12 @@ function App() {
                 </form>
               </div>
 
-              {/* Folder Configuration details */}
+              {/* Drive Integration Parameters */}
               <div className="glass-card" style={{ padding: "28px" }}>
                 <h3 style={{ fontSize: "18px", marginBottom: "20px" }}>Drive Integration Parameters</h3>
-                <div style={{ display: "flex", flexDirection: "column", gap: "16px", fontSize: "14px" }}>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>GDRIVE_ROOT_FOLDER_ID</span>
-                    <div style={{ fontSize: "12px", fontFamily: "monospace", padding: "10px", background: "rgba(0,0,0,0.2)", borderRadius: "6px", marginTop: "4px", overflowX: "auto" }}>
-                      {syncStatus.gdrive_root_folder_id}
-                    </div>
-                  </div>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>OAuth Token Status</span>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px" }}>
-                      <span className="sync-dot idle" />
-                      <strong>Authorized (token.json saved)</strong>
-                    </div>
-                  </div>
-                </div>
+                <p style={{ color: "var(--text-muted)", fontSize: "14px" }}>
+                  Configure your GDRIVE_ROOT_FOLDER_ID and OAuth in the backend environment variables.
+                </p>
               </div>
             </div>
           )}
@@ -1014,15 +813,7 @@ function App() {
       {currentSong && (
         <div className="player-bar glass" style={{ height: "80px", gridTemplateColumns: "1fr 2fr 1fr", position: "fixed", bottom: 0, left: 0, width: "100%", borderTop: "1px solid var(--border-glass)" }}>
           <div className="player-song-details">
-            <img
-              src={currentSong.cover_url || ""}
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = `/api/songs/${currentSong.id}/cover`;
-              }}
-              className="player-cover"
-              alt=""
-              style={{ width: "48px", height: "48px", borderRadius: "6px" }}
-            />
+            <SongCover song={currentSong} size="48px" fontSize="16px" />
             <div className="player-song-meta">
               <span className="player-title">{currentSong.title}</span>
               <span className="player-artist">{currentSong.artist}</span>
@@ -1063,6 +854,14 @@ function App() {
           </div>
 
           <div className="player-right">
+            <button 
+              onClick={() => setShowQueue(!showQueue)} 
+              className="control-btn" 
+              style={{ color: showQueue ? "var(--color-primary)" : "inherit", marginRight: "8px" }}
+              title="Play Queue"
+            >
+              <ListMusic size={16} />
+            </button>
             <button onClick={() => setIsMuted(!isMuted)} className="control-btn">
               {isMuted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
             </button>
@@ -1082,6 +881,77 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Queue Drawer Panel */}
+      {showQueue && (
+        <aside className="sidebar glass" style={{ width: "300px", position: "fixed", right: 0, top: 0, height: "calc(100% - 80px)", zIndex: 10, padding: "20px", display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border-glass)" }}>
+          <div className="flex-center" style={{ justifyContent: "space-between", marginBottom: "16px" }}>
+            <h3 style={{ fontSize: "16px", fontWeight: "bold", display: "flex", alignItems: "center", gap: "8px", margin: 0 }}><ListMusic size={18} /> Play Queue</h3>
+            <button onClick={() => setShowQueue(false)} className="control-btn" style={{ padding: "4px" }}><X size={18} /></button>
+          </div>
+
+          <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "16px" }}>
+            {/* Now Playing */}
+            {currentSong && (
+              <div>
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Now Playing</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "8px" }}>
+                  <SongCover song={currentSong} size="36px" fontSize="12px" />
+                  <div style={{ overflow: "hidden" }}>
+                    <div style={{ fontWeight: 600, fontSize: "13px", color: "var(--color-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{currentSong.title}</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{currentSong.artist}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Next In Queue (Manual) */}
+            <div>
+              <div className="flex-center" style={{ justifyContent: "space-between", marginBottom: "8px" }}>
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Next in Queue</span>
+                {songQueue.length > 0 && <button onClick={clearQueue} style={{ fontSize: "11px", background: "none", border: "none", color: "var(--color-danger)", cursor: "pointer", padding: 0 }}>Clear</button>}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {songQueue.map((s, idx) => (
+                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "6px", background: "rgba(255,255,255,0.02)", borderRadius: "6px" }}>
+                    <SongCover song={s} size="32px" fontSize="11px" />
+                    <div style={{ flex: 1, overflow: "hidden" }}>
+                      <div style={{ fontWeight: 500, fontSize: "12px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.title}</div>
+                      <div style={{ fontSize: "10px", color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.artist}</div>
+                    </div>
+                    <button onClick={() => removeFromQueue(idx)} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.3)", cursor: "pointer", fontSize: "16px", padding: "0 4px" }}>&times;</button>
+                  </div>
+                ))}
+                {songQueue.length === 0 && <div style={{ fontSize: "12px", color: "var(--text-muted)", fontStyle: "italic" }}>Queue is empty</div>}
+              </div>
+            </div>
+
+            {/* Next Up (Remaining Playlist) */}
+            {activePlaylistSongs.length > 0 && currentSong && (
+              <div>
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Next Up from List</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
+                  {(() => {
+                    const idx = activePlaylistSongs.findIndex(s => s.id === currentSong.id);
+                    if (idx === -1) return null;
+                    const upcoming = activePlaylistSongs.slice(idx + 1, idx + 6); // next 5 songs
+                    if (upcoming.length === 0) return <div style={{ fontSize: "12px", color: "var(--text-muted)", fontStyle: "italic" }}>No more songs in list</div>;
+                    return upcoming.map((s, uIdx) => (
+                      <div key={uIdx} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px" }}>
+                        <SongCover song={s} size="32px" fontSize="11px" />
+                        <div style={{ overflow: "hidden" }}>
+                          <div style={{ fontWeight: 500, fontSize: "12px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.title}</div>
+                          <div style={{ fontSize: "10px", color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.artist}</div>
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+            )}
+          </div>
+        </aside>
       )}
 
       {/* Metadata Editor Inline Modal Overlay */}

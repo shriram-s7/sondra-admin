@@ -102,14 +102,28 @@ async def stream_song_proxy(
         if client_range:
             headers["Range"] = client_range
 
-        # Determine content type based on file extension
+        # Fetch file info from GDrive to get the actual filename and mimeType
+        gdrive_name = ""
+        gdrive_mime = ""
+        async with httpx.AsyncClient() as meta_client:
+            meta_res = await meta_client.get(
+                f"https://www.googleapis.com/drive/v3/files/{song.gdrive_file_id}?fields=name,mimeType",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            if meta_res.status_code == 200:
+                gdrive_info = meta_res.json()
+                gdrive_name = gdrive_info.get("name", "").lower()
+                gdrive_mime = gdrive_info.get("mimeType", "")
+
+        # Determine exact content type
         content_type = "audio/mpeg"
-        title_lower = song.title.lower() if song.title else ""
-        if title_lower.endswith(".flac"):
+        if gdrive_mime and "audio" in gdrive_mime:
+            content_type = gdrive_mime
+        elif gdrive_name.endswith(".flac"):
             content_type = "audio/flac"
-        elif title_lower.endswith(".m4a") or title_lower.endswith(".mp4"):
+        elif gdrive_name.endswith(".m4a") or gdrive_name.endswith(".mp4"):
             content_type = "audio/mp4"
-        elif title_lower.endswith(".wav"):
+        elif gdrive_name.endswith(".wav"):
             content_type = "audio/wav"
 
         # Create an async client and stream the response

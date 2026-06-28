@@ -30,6 +30,11 @@ dependencies:
   
   # Icon sets
   cupertino_icons: ^1.0.6
+  just_audio_windows: ^0.2.3
+
+  # Local file system & path utilities
+  path_provider: ^2.1.0
+  path: ^1.9.0
 
 dev_dependencies:
   flutter_test:

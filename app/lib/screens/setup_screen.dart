@@ -1,4 +1,4 @@
-import 'package:flutter/material';
+import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import 'home_screen.dart';
 
@@ -10,7 +10,6 @@ class SetupScreen extends StatefulWidget {
 }
 
 class _SetupScreenState extends State<SetupScreen> {
-  final _serverController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
@@ -40,11 +39,10 @@ class _SetupScreenState extends State<SetupScreen> {
       _errorMessage = null;
     });
 
-    final serverUrl = _serverController.text.trim();
     final username = _usernameController.text.trim();
     final password = _passwordController.text.trim();
 
-    if (serverUrl.isEmpty || username.isEmpty || password.isEmpty) {
+    if (username.isEmpty || password.isEmpty) {
       setState(() {
         _isLoading = false;
         _errorMessage = "All fields are required.";
@@ -52,7 +50,7 @@ class _SetupScreenState extends State<SetupScreen> {
       return;
     }
 
-    final success = await ApiService().login(serverUrl, username, password);
+    final success = await ApiService().login(username, password);
     
     if (mounted) {
       setState(() {
@@ -65,7 +63,7 @@ class _SetupScreenState extends State<SetupScreen> {
         );
       } else {
         setState(() {
-          _errorMessage = "Authentication failed. Check your URL and credentials.";
+          _errorMessage = "Authentication failed. Check your credentials.";
         });
       }
     }
@@ -86,7 +84,7 @@ class _SetupScreenState extends State<SetupScreen> {
             children: [
               const Icon(
                 Icons.music_note_rounded,
-                color: Color(0xFF7C3AED),
+                color: Color(0xFF8B5CF6),
                 size: 72,
               ),
               const SizedBox(height: 12),
@@ -128,29 +126,6 @@ class _SetupScreenState extends State<SetupScreen> {
                 const SizedBox(height: 16),
               ],
 
-              // Server URL Field
-              TextField(
-                controller: _serverController,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: "Server URL",
-                  labelStyle: const TextStyle(color: Colors.white60),
-                  hintText: "https://sondra-backend.onrender.com",
-                  hintStyle: const TextStyle(color: Colors.white30),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.05),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF7C3AED)),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-
               // Username Field
               TextField(
                 controller: _usernameController,
@@ -166,7 +141,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF7C3AED)),
+                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
                   ),
                 ),
               ),
@@ -188,7 +163,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF7C3AED)),
+                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
                   ),
                 ),
               ),
@@ -197,7 +172,7 @@ class _SetupScreenState extends State<SetupScreen> {
               ElevatedButton(
                 onPressed: _isLoading ? null : _handleLogin,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF7C3AED),
+                  backgroundColor: const Color(0xFF8B5CF6),
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -213,7 +188,7 @@ class _SetupScreenState extends State<SetupScreen> {
                         ),
                       )
                     : const Text(
-                        "Connect & Log In",
+                        "Log In",
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
@@ -230,7 +205,6 @@ class _SetupScreenState extends State<SetupScreen> {
 
   @override
   void dispose() {
-    _serverController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
