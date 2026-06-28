@@ -647,11 +647,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   color: const Color(0xFF1C1A25),
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                   onSelected: (value) async {
-                                    if (value == 'delete') {
+                                    if (value == 'rename') {
+                                      await _renamePlaylist(pl['id'], pl['name'] ?? '');
+                                    } else if (value == 'delete') {
                                       await _deletePlaylist(pl['id'], pl['name'] ?? '');
                                     }
                                   },
                                   itemBuilder: (_) => [
+                                    const PopupMenuItem(value: 'rename', child: ListTile(
+                                      leading: Icon(Icons.edit_rounded, color: Colors.white, size: 20),
+                                      title: Text('Rename', style: TextStyle(color: Colors.white, fontSize: 14)),
+                                      dense: true, contentPadding: EdgeInsets.zero,
+                                    )),
                                     const PopupMenuItem(value: 'delete', child: ListTile(
                                       leading: Icon(Icons.delete_rounded, color: Colors.redAccent, size: 20),
                                       title: Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 14)),

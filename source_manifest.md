@@ -1560,11 +1560,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   color: const Color(0xFF1C1A25),
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                   onSelected: (value) async {
-                                    if (value == 'delete') {
+                                    if (value == 'rename') {
+                                      await _renamePlaylist(pl['id'], pl['name'] ?? '');
+                                    } else if (value == 'delete') {
                                       await _deletePlaylist(pl['id'], pl['name'] ?? '');
                                     }
                                   },
                                   itemBuilder: (_) => [
+                                    const PopupMenuItem(value: 'rename', child: ListTile(
+                                      leading: Icon(Icons.edit_rounded, color: Colors.white, size: 20),
+                                      title: Text('Rename', style: TextStyle(color: Colors.white, fontSize: 14)),
+                                      dense: true, contentPadding: EdgeInsets.zero,
+                                    )),
                                     const PopupMenuItem(value: 'delete', child: ListTile(
                                       leading: Icon(Icons.delete_rounded, color: Colors.redAccent, size: 20),
                                       title: Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 14)),
@@ -3359,6 +3366,7 @@ import '../widgets/song_cover.dart';
 import '../widgets/song_options_menu.dart';
 import '../widgets/mini_player.dart';
 import 'now_playing_screen.dart';
+import '../services/api_service.dart';
 
 class OfflinePlaylistScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> playlist;
@@ -3468,6 +3476,12 @@ class _OfflinePlaylistScreenState
               )
             : null,
         actions: [
+          if (_playlist['type'] == 'personal' || _playlist['type'] == 'offline')
+            IconButton(
+              onPressed: _showAddSongsSheet,
+              icon: const Icon(Icons.playlist_add_rounded, color: Color(0xFF8B5CF6)),
+              tooltip: 'Add songs',
+            ),
           if (hasNotDownloaded && _playlist['type'] != 'personal')
             IconButton(
               onPressed: hasPendingDownloads ? null : _downloadAll,
@@ -3539,17 +3553,19 @@ class _OfflinePlaylistScreenState
                 final isCurrent = playerState.currentSong?['id'] == songId;
 
                  return GestureDetector(
-                   onSecondaryTapDown: (details) {
-                     if (Platform.isWindows) {
-                       SongOptionsButton.showRightClickMenu(
-                         context,
-                         details.globalPosition,
-                         ref,
-                         _buildSongMap(entry),
-                         onPlaylistChanged: _refreshPlaylist,
-                       );
-                     }
-                   },
+                    onSecondaryTapDown: (details) {
+                      if (Platform.isWindows) {
+                        SongOptionsButton.showRightClickMenu(
+                          context,
+                          details.globalPosition,
+                          ref,
+                          _buildSongMap(entry),
+                          onPlaylistChanged: _refreshPlaylist,
+                          playlistId: _playlist['id'],
+                          songEntryId: entry['id'],
+                        );
+                      }
+                    },
                    child: ListTile(
                      onTap: () => _playSong(entry),
                      contentPadding:
@@ -3638,23 +3654,56 @@ class _OfflinePlaylistScreenState
                          ],
                        ],
                      ),
-                     trailing: Row(
-                       mainAxisSize: MainAxisSize.min,
-                       children: [
-                         if (isCurrent && playerState.isPlaying)
-                           const Icon(Icons.equalizer_rounded, color: Color(0xFF8B5CF6), size: 20)
-                         else
-                           Text(
-                             "${(entry["duration_seconds"] ?? 0) ~/ 60}:${((entry["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
-                             style: const TextStyle(color: Colors.white30, fontSize: 11),
-                           ),
-                         const SizedBox(width: 4),
-                         SongOptionsButton(
-                           song: _buildSongMap(entry),
-                           onPlaylistChanged: _refreshPlaylist,
-                         ),
-                       ],
-                     ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_playlist['type'] == 'personal' || _playlist['type'] == 'offline') ...[
+                            if (idx - 1 > 0)
+                              IconButton(
+                                icon: const Icon(Icons.keyboard_arrow_up_rounded, color: Colors.white38, size: 20),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () async {
+                                  await OfflineStorage().reorderSong(
+                                    _playlist['id'] as int,
+                                    idx - 1,
+                                    idx - 2,
+                                  );
+                                  _refreshPlaylist();
+                                },
+                              ),
+                            if (idx - 1 < songs.length - 1)
+                              IconButton(
+                                icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white38, size: 20),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () async {
+                                  await OfflineStorage().reorderSong(
+                                    _playlist['id'] as int,
+                                    idx - 1,
+                                    idx,
+                                  );
+                                  _refreshPlaylist();
+                                },
+                              ),
+                            const SizedBox(width: 4),
+                          ],
+                          if (isCurrent && playerState.isPlaying)
+                            const Icon(Icons.equalizer_rounded, color: Color(0xFF8B5CF6), size: 20)
+                          else
+                            Text(
+                              "${(entry["duration_seconds"] ?? 0) ~/ 60}:${((entry["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
+                              style: const TextStyle(color: Colors.white30, fontSize: 11),
+                            ),
+                          const SizedBox(width: 4),
+                          SongOptionsButton(
+                            song: _buildSongMap(entry),
+                            onPlaylistChanged: _refreshPlaylist,
+                            playlistId: _playlist['id'],
+                            songEntryId: entry['id'],
+                          ),
+                        ],
+                      ),
                    ),
                   );
 
@@ -3780,6 +3829,140 @@ class _OfflinePlaylistScreenState
     if (songs.isEmpty) return;
     final playlist = songs.map((s) => _buildSongMap(s)).toList();
     ref.read(playerProvider.notifier).playPlaylistShuffled(playlist, _playlist['name'] ?? '');
+  }
+
+  Future<void> _showAddSongsSheet() async {
+    final scaffoldContext = context;
+    final currentSongs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
+    final currentIds = currentSongs.map((s) => s['song_id'] as int).toSet();
+    final selectedSongs = <Map<String, dynamic>>[];
+
+    await showModalBottomSheet<List<Map<String, dynamic>>>(
+      context: scaffoldContext,
+      backgroundColor: const Color(0xFF111019),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setSheetState) {
+            return FutureBuilder<List<dynamic>>(
+              future: ApiService().getSongs(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: CircularProgressIndicator(color: Color(0xFF8B5CF6)),
+                    ),
+                  );
+                }
+                if (snapshot.hasError || !snapshot.hasData) {
+                  return const SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: Text("Error fetching songs", style: TextStyle(color: Colors.white54)),
+                    ),
+                  );
+                }
+
+                final allSongs = List<Map<String, dynamic>>.from(snapshot.data!);
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "Add Songs to Playlist",
+                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          ElevatedButton(
+                            onPressed: selectedSongs.isEmpty
+                                ? null
+                                : () {
+                                    Navigator.of(ctx).pop(selectedSongs);
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF8B5CF6),
+                              foregroundColor: Colors.white,
+                              disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                            ),
+                            child: const Text("Add"),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: allSongs.length,
+                        itemBuilder: (context, idx) {
+                          final song = allSongs[idx];
+                          final songId = song['id'] as int;
+                          final isAlreadyIn = currentIds.contains(songId);
+                          final isSelected = selectedSongs.any((s) => s['id'] == songId);
+
+                          return ListTile(
+                            leading: SongCoverWidget(
+                              song: song,
+                              width: 40,
+                              height: 40,
+                              borderRadius: 4.0,
+                            ),
+                            title: Text(
+                              song['title'] ?? 'Unknown Track',
+                              style: TextStyle(
+                                color: isAlreadyIn ? Colors.white30 : Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            subtitle: Text(
+                              song['artist'] ?? 'Unknown Artist',
+                              style: TextStyle(
+                                color: isAlreadyIn ? Colors.white24 : Colors.white38,
+                                fontSize: 12,
+                              ),
+                            ),
+                            trailing: isAlreadyIn
+                                ? const Icon(Icons.check_circle_rounded, color: Colors.white24)
+                                : Checkbox(
+                                    value: isSelected,
+                                    activeColor: const Color(0xFF8B5CF6),
+                                    onChanged: (val) {
+                                      setSheetState(() {
+                                        if (val == true) {
+                                          selectedSongs.add(song);
+                                        } else {
+                                          selectedSongs.removeWhere((s) => s['id'] == songId);
+                                        }
+                                      });
+                                    },
+                                  ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
+    ).then((res) async {
+      if (res != null && res.isNotEmpty) {
+        final storage = OfflineStorage();
+        await storage.addSongsToPlaylist(_playlist['id'] as int, res);
+        
+        if (_playlist['type'] == 'offline') {
+          for (final song in res) {
+            await _downloadManager.downloadSong(_playlist['id'] as int, song);
+          }
+        }
+        _refreshPlaylist();
+      }
+    });
   }
 }
 ```
@@ -4701,6 +4884,22 @@ class OfflineStorage {
     await _save();
   }
 
+  Future<void> reorderSong(int playlistId, int fromIndex, int toIndex) async {
+    final plIdx = _playlists.indexWhere((p) => p['id'] == playlistId);
+    if (plIdx == -1) return;
+
+    final songs = List<Map<String, dynamic>>.from(_playlists[plIdx]['songs'] ?? []);
+    if (fromIndex < 0 || fromIndex >= songs.length || toIndex < 0 || toIndex >= songs.length) {
+      return;
+    }
+
+    final item = songs.removeAt(fromIndex);
+    songs.insert(toIndex, item);
+
+    _playlists[plIdx]['songs'] = songs;
+    await _save();
+  }
+
   Future<void> deletePlaylist(int playlistId) async {
     _playlists.removeWhere((p) => p['id'] == playlistId);
     await _save();
@@ -5433,6 +5632,8 @@ class SongOptionsButton extends ConsumerWidget {
   final bool inQueue;
   final int? queueIndex;
   final VoidCallback? onPlaylistChanged;
+  final int? playlistId;
+  final int? songEntryId;
 
   const SongOptionsButton({
     super.key,
@@ -5440,6 +5641,8 @@ class SongOptionsButton extends ConsumerWidget {
     this.inQueue = false,
     this.queueIndex,
     this.onPlaylistChanged,
+    this.playlistId,
+    this.songEntryId,
   });
 
   @override
@@ -5481,7 +5684,17 @@ class SongOptionsButton extends ConsumerWidget {
   }
 
   // Right-click helper called by the enclosing song row Gesture Detector
-  static void showRightClickMenu(BuildContext context, Offset globalPos, WidgetRef ref, Map<String, dynamic> song, {bool inQueue = false, int? queueIndex, VoidCallback? onPlaylistChanged}) {
+  static void showRightClickMenu(
+    BuildContext context,
+    Offset globalPos,
+    WidgetRef ref,
+    Map<String, dynamic> song, {
+    bool inQueue = false,
+    int? queueIndex,
+    VoidCallback? onPlaylistChanged,
+    int? playlistId,
+    int? songEntryId,
+  }) {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final position = RelativeRect.fromRect(
       Rect.fromPoints(globalPos, globalPos),
@@ -5493,6 +5706,8 @@ class SongOptionsButton extends ConsumerWidget {
       inQueue: inQueue,
       queueIndex: queueIndex,
       onPlaylistChanged: onPlaylistChanged,
+      playlistId: playlistId,
+      songEntryId: songEntryId,
     );
     showMenu(
       context: context,
@@ -5565,6 +5780,18 @@ class SongOptionsButton extends ConsumerWidget {
           color: Colors.redAccent,
           onTap: () {
             ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
+          },
+        ),
+      if (playlistId != null && songEntryId != null)
+        _popupItem(
+          icon: Icons.playlist_remove_rounded,
+          title: "Remove from Playlist",
+          color: Colors.redAccent,
+          onTap: () async {
+            await OfflineStorage().deleteSong(playlistId!, songEntryId!);
+            if (onPlaylistChanged != null) {
+              onPlaylistChanged!();
+            }
           },
         ),
     ];
@@ -5700,6 +5927,19 @@ class SongOptionsButton extends ConsumerWidget {
                   color: Colors.redAccent,
                   onTap: () {
                     ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
+                  },
+                ),
+              if (playlistId != null && songEntryId != null)
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.playlist_remove_rounded,
+                  title: "Remove from Playlist",
+                  color: Colors.redAccent,
+                  onTap: () async {
+                    await OfflineStorage().deleteSong(playlistId!, songEntryId!);
+                    if (onPlaylistChanged != null) {
+                      onPlaylistChanged!();
+                    }
                   },
                 ),
               const SizedBox(height: 12),

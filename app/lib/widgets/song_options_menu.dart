@@ -11,6 +11,8 @@ class SongOptionsButton extends ConsumerWidget {
   final bool inQueue;
   final int? queueIndex;
   final VoidCallback? onPlaylistChanged;
+  final int? playlistId;
+  final int? songEntryId;
 
   const SongOptionsButton({
     super.key,
@@ -18,6 +20,8 @@ class SongOptionsButton extends ConsumerWidget {
     this.inQueue = false,
     this.queueIndex,
     this.onPlaylistChanged,
+    this.playlistId,
+    this.songEntryId,
   });
 
   @override
@@ -59,7 +63,17 @@ class SongOptionsButton extends ConsumerWidget {
   }
 
   // Right-click helper called by the enclosing song row Gesture Detector
-  static void showRightClickMenu(BuildContext context, Offset globalPos, WidgetRef ref, Map<String, dynamic> song, {bool inQueue = false, int? queueIndex, VoidCallback? onPlaylistChanged}) {
+  static void showRightClickMenu(
+    BuildContext context,
+    Offset globalPos,
+    WidgetRef ref,
+    Map<String, dynamic> song, {
+    bool inQueue = false,
+    int? queueIndex,
+    VoidCallback? onPlaylistChanged,
+    int? playlistId,
+    int? songEntryId,
+  }) {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final position = RelativeRect.fromRect(
       Rect.fromPoints(globalPos, globalPos),
@@ -71,6 +85,8 @@ class SongOptionsButton extends ConsumerWidget {
       inQueue: inQueue,
       queueIndex: queueIndex,
       onPlaylistChanged: onPlaylistChanged,
+      playlistId: playlistId,
+      songEntryId: songEntryId,
     );
     showMenu(
       context: context,
@@ -143,6 +159,18 @@ class SongOptionsButton extends ConsumerWidget {
           color: Colors.redAccent,
           onTap: () {
             ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
+          },
+        ),
+      if (playlistId != null && songEntryId != null)
+        _popupItem(
+          icon: Icons.playlist_remove_rounded,
+          title: "Remove from Playlist",
+          color: Colors.redAccent,
+          onTap: () async {
+            await OfflineStorage().deleteSong(playlistId!, songEntryId!);
+            if (onPlaylistChanged != null) {
+              onPlaylistChanged!();
+            }
           },
         ),
     ];
@@ -278,6 +306,19 @@ class SongOptionsButton extends ConsumerWidget {
                   color: Colors.redAccent,
                   onTap: () {
                     ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
+                  },
+                ),
+              if (playlistId != null && songEntryId != null)
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.playlist_remove_rounded,
+                  title: "Remove from Playlist",
+                  color: Colors.redAccent,
+                  onTap: () async {
+                    await OfflineStorage().deleteSong(playlistId!, songEntryId!);
+                    if (onPlaylistChanged != null) {
+                      onPlaylistChanged!();
+                    }
                   },
                 ),
               const SizedBox(height: 12),

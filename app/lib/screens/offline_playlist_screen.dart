@@ -9,6 +9,7 @@ import '../widgets/song_cover.dart';
 import '../widgets/song_options_menu.dart';
 import '../widgets/mini_player.dart';
 import 'now_playing_screen.dart';
+import '../services/api_service.dart';
 
 class OfflinePlaylistScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> playlist;
@@ -118,6 +119,12 @@ class _OfflinePlaylistScreenState
               )
             : null,
         actions: [
+          if (_playlist['type'] == 'personal' || _playlist['type'] == 'offline')
+            IconButton(
+              onPressed: _showAddSongsSheet,
+              icon: const Icon(Icons.playlist_add_rounded, color: Color(0xFF8B5CF6)),
+              tooltip: 'Add songs',
+            ),
           if (hasNotDownloaded && _playlist['type'] != 'personal')
             IconButton(
               onPressed: hasPendingDownloads ? null : _downloadAll,
@@ -189,17 +196,19 @@ class _OfflinePlaylistScreenState
                 final isCurrent = playerState.currentSong?['id'] == songId;
 
                  return GestureDetector(
-                   onSecondaryTapDown: (details) {
-                     if (Platform.isWindows) {
-                       SongOptionsButton.showRightClickMenu(
-                         context,
-                         details.globalPosition,
-                         ref,
-                         _buildSongMap(entry),
-                         onPlaylistChanged: _refreshPlaylist,
-                       );
-                     }
-                   },
+                    onSecondaryTapDown: (details) {
+                      if (Platform.isWindows) {
+                        SongOptionsButton.showRightClickMenu(
+                          context,
+                          details.globalPosition,
+                          ref,
+                          _buildSongMap(entry),
+                          onPlaylistChanged: _refreshPlaylist,
+                          playlistId: _playlist['id'],
+                          songEntryId: entry['id'],
+                        );
+                      }
+                    },
                    child: ListTile(
                      onTap: () => _playSong(entry),
                      contentPadding:
@@ -288,23 +297,56 @@ class _OfflinePlaylistScreenState
                          ],
                        ],
                      ),
-                     trailing: Row(
-                       mainAxisSize: MainAxisSize.min,
-                       children: [
-                         if (isCurrent && playerState.isPlaying)
-                           const Icon(Icons.equalizer_rounded, color: Color(0xFF8B5CF6), size: 20)
-                         else
-                           Text(
-                             "${(entry["duration_seconds"] ?? 0) ~/ 60}:${((entry["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
-                             style: const TextStyle(color: Colors.white30, fontSize: 11),
-                           ),
-                         const SizedBox(width: 4),
-                         SongOptionsButton(
-                           song: _buildSongMap(entry),
-                           onPlaylistChanged: _refreshPlaylist,
-                         ),
-                       ],
-                     ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_playlist['type'] == 'personal' || _playlist['type'] == 'offline') ...[
+                            if (idx - 1 > 0)
+                              IconButton(
+                                icon: const Icon(Icons.keyboard_arrow_up_rounded, color: Colors.white38, size: 20),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () async {
+                                  await OfflineStorage().reorderSong(
+                                    _playlist['id'] as int,
+                                    idx - 1,
+                                    idx - 2,
+                                  );
+                                  _refreshPlaylist();
+                                },
+                              ),
+                            if (idx - 1 < songs.length - 1)
+                              IconButton(
+                                icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white38, size: 20),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () async {
+                                  await OfflineStorage().reorderSong(
+                                    _playlist['id'] as int,
+                                    idx - 1,
+                                    idx,
+                                  );
+                                  _refreshPlaylist();
+                                },
+                              ),
+                            const SizedBox(width: 4),
+                          ],
+                          if (isCurrent && playerState.isPlaying)
+                            const Icon(Icons.equalizer_rounded, color: Color(0xFF8B5CF6), size: 20)
+                          else
+                            Text(
+                              "${(entry["duration_seconds"] ?? 0) ~/ 60}:${((entry["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
+                              style: const TextStyle(color: Colors.white30, fontSize: 11),
+                            ),
+                          const SizedBox(width: 4),
+                          SongOptionsButton(
+                            song: _buildSongMap(entry),
+                            onPlaylistChanged: _refreshPlaylist,
+                            playlistId: _playlist['id'],
+                            songEntryId: entry['id'],
+                          ),
+                        ],
+                      ),
                    ),
                   );
 
@@ -430,5 +472,139 @@ class _OfflinePlaylistScreenState
     if (songs.isEmpty) return;
     final playlist = songs.map((s) => _buildSongMap(s)).toList();
     ref.read(playerProvider.notifier).playPlaylistShuffled(playlist, _playlist['name'] ?? '');
+  }
+
+  Future<void> _showAddSongsSheet() async {
+    final scaffoldContext = context;
+    final currentSongs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
+    final currentIds = currentSongs.map((s) => s['song_id'] as int).toSet();
+    final selectedSongs = <Map<String, dynamic>>[];
+
+    await showModalBottomSheet<List<Map<String, dynamic>>>(
+      context: scaffoldContext,
+      backgroundColor: const Color(0xFF111019),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setSheetState) {
+            return FutureBuilder<List<dynamic>>(
+              future: ApiService().getSongs(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: CircularProgressIndicator(color: Color(0xFF8B5CF6)),
+                    ),
+                  );
+                }
+                if (snapshot.hasError || !snapshot.hasData) {
+                  return const SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: Text("Error fetching songs", style: TextStyle(color: Colors.white54)),
+                    ),
+                  );
+                }
+
+                final allSongs = List<Map<String, dynamic>>.from(snapshot.data!);
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "Add Songs to Playlist",
+                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          ElevatedButton(
+                            onPressed: selectedSongs.isEmpty
+                                ? null
+                                : () {
+                                    Navigator.of(ctx).pop(selectedSongs);
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF8B5CF6),
+                              foregroundColor: Colors.white,
+                              disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                            ),
+                            child: const Text("Add"),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: allSongs.length,
+                        itemBuilder: (context, idx) {
+                          final song = allSongs[idx];
+                          final songId = song['id'] as int;
+                          final isAlreadyIn = currentIds.contains(songId);
+                          final isSelected = selectedSongs.any((s) => s['id'] == songId);
+
+                          return ListTile(
+                            leading: SongCoverWidget(
+                              song: song,
+                              width: 40,
+                              height: 40,
+                              borderRadius: 4.0,
+                            ),
+                            title: Text(
+                              song['title'] ?? 'Unknown Track',
+                              style: TextStyle(
+                                color: isAlreadyIn ? Colors.white30 : Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            subtitle: Text(
+                              song['artist'] ?? 'Unknown Artist',
+                              style: TextStyle(
+                                color: isAlreadyIn ? Colors.white24 : Colors.white38,
+                                fontSize: 12,
+                              ),
+                            ),
+                            trailing: isAlreadyIn
+                                ? const Icon(Icons.check_circle_rounded, color: Colors.white24)
+                                : Checkbox(
+                                    value: isSelected,
+                                    activeColor: const Color(0xFF8B5CF6),
+                                    onChanged: (val) {
+                                      setSheetState(() {
+                                        if (val == true) {
+                                          selectedSongs.add(song);
+                                        } else {
+                                          selectedSongs.removeWhere((s) => s['id'] == songId);
+                                        }
+                                      });
+                                    },
+                                  ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
+    ).then((res) async {
+      if (res != null && res.isNotEmpty) {
+        final storage = OfflineStorage();
+        await storage.addSongsToPlaylist(_playlist['id'] as int, res);
+        
+        if (_playlist['type'] == 'offline') {
+          for (final song in res) {
+            await _downloadManager.downloadSong(_playlist['id'] as int, song);
+          }
+        }
+        _refreshPlaylist();
+      }
+    });
   }
 }

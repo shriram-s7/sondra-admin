@@ -171,6 +171,22 @@ class OfflineStorage {
     await _save();
   }
 
+  Future<void> reorderSong(int playlistId, int fromIndex, int toIndex) async {
+    final plIdx = _playlists.indexWhere((p) => p['id'] == playlistId);
+    if (plIdx == -1) return;
+
+    final songs = List<Map<String, dynamic>>.from(_playlists[plIdx]['songs'] ?? []);
+    if (fromIndex < 0 || fromIndex >= songs.length || toIndex < 0 || toIndex >= songs.length) {
+      return;
+    }
+
+    final item = songs.removeAt(fromIndex);
+    songs.insert(toIndex, item);
+
+    _playlists[plIdx]['songs'] = songs;
+    await _save();
+  }
+
   Future<void> deletePlaylist(int playlistId) async {
     _playlists.removeWhere((p) => p['id'] == playlistId);
     await _save();
