@@ -87,10 +87,10 @@ class ApiService {
       sseUrl,
       options: Options(responseType: ResponseType.stream),
     ).asStream().listen((response) {
-      final Stream<List<int>>? stream = response.data?.stream;
+      final stream = response.data?.stream;
       if (stream == null) return;
       
-      sseSubscription = stream.transform(const Utf8Decoder()).transform(const LineSplitter()).listen((line) {
+      sseSubscription = stream.cast<List<int>>().transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
         if (line.startsWith("data: ")) {
           try {
             final jsonStr = line.substring(6);

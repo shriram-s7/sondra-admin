@@ -11,7 +11,7 @@ class OfflineStorage {
   List<Map<String, dynamic>> _playlists = [];
 
   Future<String> get _storageDir async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
     final storage = Directory(p.join(dir.path, 'sondra_data'));
     if (!await storage.exists()) {
       await storage.create(recursive: true);
@@ -25,7 +25,7 @@ class OfflineStorage {
   }
 
   Future<String> get downloadsDir async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
     final dl = Directory(p.join(dir.path, 'sondra_downloads'));
     if (!await dl.exists()) {
       await dl.create(recursive: true);
