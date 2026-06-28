@@ -90,7 +90,13 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
                      pState.processingState == ProcessingState.loading,
       );
       if (pState.processingState == ProcessingState.completed) {
-        handleNext();
+        if (state.repeat == "one") {
+          state = state.copyWith(position: Duration.zero);
+          seek(Duration.zero);
+          globalAudioHandler.play();
+        } else {
+          handleNext();
+        }
       }
     });
 
@@ -216,9 +222,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     }
     
     state = state.copyWith(repeat: nextRepeat);
-    globalAudioHandler.player.setLoopMode(
-      nextRepeat == "one" ? LoopMode.one : LoopMode.off
-    );
+    globalAudioHandler.player.setLoopMode(LoopMode.off);
   }
 
   void setVolume(double vol) {
