@@ -45,12 +45,6 @@ class _OfflinePlaylistScreenState
     }
   }
 
-  Future<void> _downloadSong(Map<String, dynamic> songEntry) async {
-    await _downloadManager
-        .downloadSong(_playlist['id'] as int, songEntry);
-    _refreshPlaylist();
-  }
-
   Future<void> _downloadAll() async {
     final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
     for (final entry in songs) {
@@ -59,16 +53,6 @@ class _OfflinePlaylistScreenState
             .downloadSong(_playlist['id'] as int, entry);
       }
     }
-    _refreshPlaylist();
-  }
-
-  Future<void> _deleteSongFile(Map<String, dynamic> songEntry) async {
-    final songId = songEntry['song_id'] as int;
-    final songEntryId = songEntry['id'] as int;
-    await _downloadManager.deleteDownloadedFile(songId);
-    await OfflineStorage().updateSongStatus(
-        _playlist['id'] as int, songEntryId, 'notDownloaded',
-        filePath: null, progress: 0.0);
     _refreshPlaylist();
   }
 
@@ -183,7 +167,13 @@ class _OfflinePlaylistScreenState
                  return GestureDetector(
                    onSecondaryTapDown: (details) {
                      if (Platform.isWindows) {
-                       SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, _buildSongMap(entry));
+                       SongOptionsButton.showRightClickMenu(
+                         context,
+                         details.globalPosition,
+                         ref,
+                         _buildSongMap(entry),
+                         onPlaylistChanged: _refreshPlaylist,
+                       );
                      }
                    },
                    child: ListTile(
@@ -285,7 +275,10 @@ class _OfflinePlaylistScreenState
                              style: const TextStyle(color: Colors.white30, fontSize: 11),
                            ),
                          const SizedBox(width: 4),
-                         SongOptionsButton(song: _buildSongMap(entry)),
+                         SongOptionsButton(
+                           song: _buildSongMap(entry),
+                           onPlaylistChanged: _refreshPlaylist,
+                         ),
                        ],
                      ),
                    ),

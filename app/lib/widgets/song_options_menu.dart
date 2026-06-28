@@ -10,12 +10,14 @@ class SongOptionsButton extends ConsumerWidget {
   final Map<String, dynamic> song;
   final bool inQueue;
   final int? queueIndex;
+  final VoidCallback? onPlaylistChanged;
 
   const SongOptionsButton({
     super.key,
     required this.song,
     this.inQueue = false,
     this.queueIndex,
+    this.onPlaylistChanged,
   });
 
   @override
@@ -57,14 +59,19 @@ class SongOptionsButton extends ConsumerWidget {
   }
 
   // Right-click helper called by the enclosing song row Gesture Detector
-  static void showRightClickMenu(BuildContext context, Offset globalPos, WidgetRef ref, Map<String, dynamic> song, {bool inQueue = false, int? queueIndex}) {
+  static void showRightClickMenu(BuildContext context, Offset globalPos, WidgetRef ref, Map<String, dynamic> song, {bool inQueue = false, int? queueIndex, VoidCallback? onPlaylistChanged}) {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final position = RelativeRect.fromRect(
       Rect.fromPoints(globalPos, globalPos),
       Offset.zero & overlay.size,
     );
 
-    final button = SongOptionsButton(song: song, inQueue: inQueue, queueIndex: queueIndex);
+    final button = SongOptionsButton(
+      song: song,
+      inQueue: inQueue,
+      queueIndex: queueIndex,
+      onPlaylistChanged: onPlaylistChanged,
+    );
     showMenu(
       context: context,
       position: position,
@@ -115,6 +122,20 @@ class SongOptionsButton extends ConsumerWidget {
           });
         },
       ),
+      if (song['local_file_path'] != null && (song['local_file_path'] as String).isNotEmpty)
+        _popupItem(
+          icon: Icons.delete_outline_rounded,
+          title: "Remove Local Download",
+          color: Colors.redAccent,
+          onTap: () async {
+            final songId = song['id'] as int;
+            await DownloadManager().deleteDownloadedFile(songId);
+            await OfflineStorage().removeSongDownload(songId);
+            if (onPlaylistChanged != null) {
+              onPlaylistChanged!();
+            }
+          },
+        ),
       if (inQueue && queueIndex != null)
         _popupItem(
           icon: Icons.remove_circle_outline_rounded,
@@ -234,6 +255,21 @@ class SongOptionsButton extends ConsumerWidget {
                   _showPlaylistSelectionDialog(context, type: 'offline');
                 },
               ),
+              if (song['local_file_path'] != null && (song['local_file_path'] as String).isNotEmpty)
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.delete_outline_rounded,
+                  title: "Remove Local Download",
+                  color: Colors.redAccent,
+                  onTap: () async {
+                    final songId = song['id'] as int;
+                    await DownloadManager().deleteDownloadedFile(songId);
+                    await OfflineStorage().removeSongDownload(songId);
+                    if (onPlaylistChanged != null) {
+                      onPlaylistChanged!();
+                    }
+                  },
+                ),
               if (inQueue && queueIndex != null)
                 _bottomSheetItem(
                   context: ctx,
@@ -404,6 +440,10 @@ class SongOptionsButton extends ConsumerWidget {
         // Trigger download
         DownloadManager().downloadSong(playlistId, entry);
       }
+    }
+
+    if (onPlaylistChanged != null) {
+      onPlaylistChanged!();
     }
 
     if (context.mounted) {

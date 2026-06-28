@@ -154,8 +154,31 @@ class OfflineStorage {
     await _save();
   }
 
+  Future<void> removeSongDownload(int songId) async {
+    bool changed = false;
+    for (int i = 0; i < _playlists.length; i++) {
+      final songs = List<Map<String, dynamic>>.from(_playlists[i]['songs'] ?? []);
+      bool playlistChanged = false;
+      for (int j = 0; j < songs.length; j++) {
+        if (songs[j]['song_id'] == songId) {
+          songs[j]['status'] = 'notDownloaded';
+          songs[j]['local_file_path'] = null;
+          songs[j]['progress'] = 0.0;
+          playlistChanged = true;
+          changed = true;
+        }
+      }
+      if (playlistChanged) {
+        _playlists[i]['songs'] = songs;
+      }
+    }
+    if (changed) {
+      await _save();
+    }
+  }
+
   static Future<int> getTotalDownloadSize() async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
     final downloadDir = Directory(p.join(dir.path, 'sondra_downloads'));
     if (!await downloadDir.exists()) return 0;
     int total = 0;
