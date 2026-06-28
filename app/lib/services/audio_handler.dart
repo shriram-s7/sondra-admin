@@ -1,9 +1,11 @@
-import 'dart:io' show Platform;
+import 'dart:io' show Platform, File;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:smtc_windows/smtc_windows.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:path_provider/path_provider.dart' show getTemporaryDirectory;
+import 'package:path/path.dart' as p;
 
 class SondraAudioHandler extends BaseAudioHandler {
   final AudioPlayer _player = AudioPlayer();
@@ -101,14 +103,48 @@ class SondraAudioHandler extends BaseAudioHandler {
       final isLocalFilePath = uri.startsWith('/') || 
           (uri.length > 2 && uri[1] == ':'); // Windows drive path like C:\...
       
-      if (isLocalFilePath) {
-        await _player.setAudioSource(AudioSource.file(uri));
-      } else {
-        final parsedUri = Uri.parse(uri);
-        if (parsedUri.scheme == 'file') {
-          await _player.setAudioSource(AudioSource.file(parsedUri.toFilePath()));
+      if (!kIsWeb && Platform.isAndroid) {
+        // Android-specific: prevent cache collision and metadata mismatch
+        if (isLocalFilePath) {
+          await _player.setAudioSource(
+            AudioSource.file(
+              uri,
+              tag: item,
+            ),
+          );
         } else {
-          await _player.setAudioSource(LockCachingAudioSource(parsedUri));
+          final parsedUri = Uri.parse(uri);
+          if (parsedUri.scheme == 'file') {
+            await _player.setAudioSource(
+              AudioSource.file(
+                parsedUri.toFilePath(),
+                tag: item,
+              ),
+            );
+          } else {
+            // Specify a unique cacheFile for each song using the unique song ID
+            final tempDir = await getTemporaryDirectory();
+            final uniqueCacheFile = File(p.join(tempDir.path, 'sondra_cache_${item.id}.mp3'));
+            await _player.setAudioSource(
+              LockCachingAudioSource(
+                parsedUri,
+                cacheFile: uniqueCacheFile,
+                tag: item,
+              ),
+            );
+          }
+        }
+      } else {
+        // Other platforms (Windows, etc.): do not modify existing behavior
+        if (isLocalFilePath) {
+          await _player.setAudioSource(AudioSource.file(uri));
+        } else {
+          final parsedUri = Uri.parse(uri);
+          if (parsedUri.scheme == 'file') {
+            await _player.setAudioSource(AudioSource.file(parsedUri.toFilePath()));
+          } else {
+            await _player.setAudioSource(LockCachingAudioSource(parsedUri));
+          }
         }
       }
       await _player.play();
