@@ -204,9 +204,9 @@ def get_sync_status(
         total_playlists = db.query(models.Playlist).count()
         
         try:
-            interval = int(os.getenv("SYNC_INTERVAL_SECONDS", "30"))
+            interval = int(os.getenv("SYNC_INTERVAL_SECONDS", "900"))
         except Exception:
-            interval = 30
+            interval = 900
             
         return {
             "last_sync": sync_manager.last_sync.isoformat() if sync_manager.last_sync else None,

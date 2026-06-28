@@ -38,10 +38,10 @@ async def run_periodic_sync_daemon():
             from dotenv import load_dotenv
             load_dotenv(override=True)
             
-            interval_str = os.getenv("SYNC_INTERVAL_SECONDS", "30")
+            interval_str = os.getenv("SYNC_INTERVAL_SECONDS", "900")
             interval = int(interval_str)
         except Exception:
-            interval = 30
+            interval = 900
 
         await asyncio.sleep(interval)
         
