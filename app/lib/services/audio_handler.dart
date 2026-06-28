@@ -3,10 +3,12 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:smtc_windows/smtc_windows.dart';
+import 'package:audio_session/audio_session.dart';
 
 class SondraAudioHandler extends BaseAudioHandler {
   final AudioPlayer _player = AudioPlayer();
   SMTCWindows? _smtc;
+  Future<void>? _initFuture;
 
   // Callbacks hooked by the Riverpod notifier
   Future<void> Function()? onSkipToNext;
@@ -19,6 +21,23 @@ class SondraAudioHandler extends BaseAudioHandler {
     // Initialize Windows System Media Transport Controls (SMTC)
     if (kIsWeb ? false : Platform.isWindows) {
       _initWindowsSmtc();
+    }
+
+    // Trigger audio session initialization immediately
+    ensureInitialized();
+  }
+
+  Future<void> ensureInitialized() async {
+    _initFuture ??= _initAudioSession();
+    await _initFuture;
+  }
+
+  Future<void> _initAudioSession() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+    } catch (e) {
+      print("AudioSession configuration failed: $e");
     }
   }
 
@@ -65,6 +84,7 @@ class SondraAudioHandler extends BaseAudioHandler {
   }
 
   Future<void> playUri(String uri, MediaItem item) async {
+    await ensureInitialized();
     mediaItem.add(item);
 
     // Update SMTC Metadata on Windows
@@ -91,7 +111,7 @@ class SondraAudioHandler extends BaseAudioHandler {
           await _player.setAudioSource(LockCachingAudioSource(parsedUri));
         }
       }
-      _player.play();
+      await _player.play();
     } catch (e) {
       print("Audio player setSource error: $e");
       playbackState.add(playbackState.value.copyWith(
@@ -115,7 +135,10 @@ class SondraAudioHandler extends BaseAudioHandler {
   }
 
   @override
-  Future<void> play() => _player.play();
+  Future<void> play() async {
+    await ensureInitialized();
+    await _player.play();
+  }
 
   @override
   Future<void> pause() => _player.pause();

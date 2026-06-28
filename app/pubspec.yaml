@@ -17,6 +17,7 @@ dependencies:
   # Audio Playback & Service
   just_audio: ^0.9.36
   audio_service: ^0.18.12
+  audio_session: ^0.1.16
   
   # HTTP Client
   dio: ^5.4.0
