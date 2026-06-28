@@ -70,11 +70,24 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                song["title"] ?? "Unknown Track",
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    song["title"] ?? "Unknown Track",
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    "${song["artist"] ?? "Unknown Artist"} · ${playerState.activePlaylistName}",
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white54, fontSize: 10),
+                  ),
+                ],
               ),
             ),
             if (playerState.isBuffering)
@@ -85,6 +98,15 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                   child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF8B5CF6)),
                 ),
               ),
+            IconButton(
+              icon: Icon(
+                Icons.shuffle_rounded,
+                color: playerState.shuffle ? const Color(0xFF8B5CF6) : Colors.white70,
+                size: 24,
+              ),
+              onPressed: () => notifier.toggleShuffle(),
+              tooltip: playerState.shuffle ? "Disable Shuffle" : "Enable Shuffle",
+            ),
             IconButton(
               icon: Icon(
                 playerState.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
@@ -107,7 +129,7 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
   // ──────────────────────────────────────────────────────────────
   Widget _buildWindowsBar(BuildContext context, PlayerState playerState, PlayerNotifier notifier, Map<String, dynamic> song) {
     return Container(
-      height: 80,
+      height: 72,
       decoration: const BoxDecoration(
         color: Color(0xFF111019),
         border: Border(top: BorderSide(color: Colors.white10, width: 0.5)),
@@ -151,6 +173,24 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                               style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
                             ),
                           ),
+                          const SizedBox(height: 2),
+                          SizedBox(
+                            width: 110,
+                            child: Row(
+                              children: [
+                                const Icon(Icons.playlist_play_rounded, size: 10, color: Colors.white30),
+                                const SizedBox(width: 2),
+                                Expanded(
+                                  child: Text(
+                                    playerState.activePlaylistName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: Colors.white30, fontSize: 9),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -185,9 +225,10 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                   children: [
                     _compactBtn(
                       icon: Icons.shuffle_rounded,
-                      color: playerState.shuffle ? const Color(0xFF8B5CF6) : Colors.white38,
-                      size: 18,
+                      color: playerState.shuffle ? const Color(0xFF8B5CF6) : Colors.white70,
+                      size: 20,
                       onPressed: () => notifier.toggleShuffle(),
+                      tooltip: playerState.shuffle ? "Disable Shuffle" : "Enable Shuffle",
                     ),
                     const SizedBox(width: 4),
                     _compactBtn(
@@ -328,15 +369,17 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
     required Color color,
     required double size,
     required VoidCallback onPressed,
+    String? tooltip,
   }) {
     return SizedBox(
-      width: 32,
-      height: 32,
+      width: 36,
+      height: 36,
       child: IconButton(
         icon: Icon(icon, color: color, size: size),
         onPressed: onPressed,
+        tooltip: tooltip,
         padding: EdgeInsets.zero,
-        splashRadius: 16,
+        splashRadius: 18,
       ),
     );
   }

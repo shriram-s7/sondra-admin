@@ -90,7 +90,7 @@ class ApiService {
       final stream = response.data?.stream;
       if (stream == null) return;
       
-      sseSubscription = stream.cast<List<int>>().transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+      sseSubscription = stream.map((event) => event as List<int>).transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
         if (line.startsWith("data: ")) {
           try {
             final jsonStr = line.substring(6);

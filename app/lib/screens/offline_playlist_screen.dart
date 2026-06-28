@@ -73,7 +73,7 @@ class _OfflinePlaylistScreenState
     final allSongs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
     final song = _buildSongMap(songEntry);
     final playlist = allSongs.map((s) => _buildSongMap(s)).toList();
-    ref.read(playerProvider.notifier).playSong(song, playlist);
+    ref.read(playerProvider.notifier).playSong(song, playlist, playlistName: _playlist['name']);
   }
 
   Map<String, dynamic> _buildSongMap(Map<String, dynamic> entry) {

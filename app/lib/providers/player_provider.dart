@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
 import '../services/api_service.dart';
 import '../services/audio_handler.dart';
+import '../services/offline_storage.dart';
 
 // Global audio handler instance injected in main
 late SondraAudioHandler globalAudioHandler;
@@ -21,6 +23,7 @@ class PlayerState {
   final List<Map<String, dynamic>> originalPlaylist;
   final List<Map<String, dynamic>> activePlaylist;
   final List<Map<String, dynamic>> queue;
+  final String activePlaylistName;
 
   PlayerState({
     this.currentSong,
@@ -34,6 +37,7 @@ class PlayerState {
     this.originalPlaylist = const [],
     this.activePlaylist = const [],
     this.queue = const [],
+    this.activePlaylistName = "Music Library",
   });
 
   PlayerState copyWith({
@@ -48,6 +52,7 @@ class PlayerState {
     List<Map<String, dynamic>>? originalPlaylist,
     List<Map<String, dynamic>>? activePlaylist,
     List<Map<String, dynamic>>? queue,
+    String? activePlaylistName,
   }) {
     return PlayerState(
       currentSong: currentSong ?? this.currentSong,
@@ -61,6 +66,7 @@ class PlayerState {
       originalPlaylist: originalPlaylist ?? this.originalPlaylist,
       activePlaylist: activePlaylist ?? this.activePlaylist,
       queue: queue ?? this.queue,
+      activePlaylistName: activePlaylistName ?? this.activePlaylistName,
     );
   }
 }
@@ -116,7 +122,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     };
   }
 
-  Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds}) async {
+  Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName}) async {
     // 1. Immediately stop current playback to release native resources instantly
     await globalAudioHandler.player.stop();
     await globalAudioHandler.player.seek(Duration.zero);
@@ -139,7 +145,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
 
     // Apply active shuffle to new queue immediately if turned on
     if (isNewQueue && state.shuffle) {
-      newActive.shuffle();
+      _secureShuffle(newActive);
       newActive.removeWhere((s) => s["id"] == song["id"]);
       newActive.insert(0, song);
     }
@@ -148,6 +154,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       currentSong: song,
       originalPlaylist: newOriginal,
       activePlaylist: newActive,
+      activePlaylistName: playlistName ?? (isNewQueue ? "Music Library" : state.activePlaylistName),
       position: startSeconds != null ? Duration(seconds: startSeconds) : Duration.zero,
       isBuffering: true,
     );
@@ -178,6 +185,8 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       }
     } catch (e) {
       print("Error loading song in provider: $e");
+      // Skip to next song automatically on loading error (Rule 5)
+      handleNext();
     }
   }
 
@@ -194,13 +203,75 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     await globalAudioHandler.seek(pos);
   }
 
+  void _secureShuffle<T>(List<T> list) {
+    if (list.length < 2) return;
+    final rand = Random.secure();
+    int entropy = DateTime.now().millisecondsSinceEpoch;
+    for (int i = list.length - 1; i > 0; i--) {
+      int secureVal = rand.nextInt(i + 1);
+      int mix = (secureVal + entropy) % (i + 1);
+      final temp = list[i];
+      list[i] = list[mix];
+      list[mix] = temp;
+      entropy = (entropy ^ (mix + 1)) * 31;
+    }
+  }
+
+  Future<Map<String, dynamic>> _findPlaylistContextFor(Map<String, dynamic> song) async {
+    // 1. Look up in local personal/offline playlists first
+    final allLocalPlaylists = OfflineStorage().getPlaylists();
+    for (final pl in allLocalPlaylists) {
+      final songs = List<Map<String, dynamic>>.from(pl["songs"] ?? []);
+      final exists = songs.any((s) => s["song_id"] == song["id"] || s["id"] == song["id"]);
+      if (exists) {
+        final name = pl["name"] ?? "Offline Playlist";
+        final list = songs.map((s) => {
+          'id': s['song_id'] ?? s['id'],
+          'title': s['title'],
+          'artist': s['artist'],
+          'album': s['album'],
+          'duration_seconds': s['duration_seconds'],
+          'cover_url': s['cover_url'],
+          'local_file_path': s['local_file_path'],
+        }).toList();
+        return {'name': name, 'songs': list};
+      }
+    }
+
+    // 2. Fetch remote playlists from ApiService
+    try {
+      final remotePlaylists = await _api.getPlaylists();
+      for (final pl in remotePlaylists) {
+        final songs = List<dynamic>.from(pl["songs"] ?? []);
+        final exists = songs.any((s) => s["id"] == song["id"]);
+        if (exists) {
+          final name = pl["name"] ?? "Remote Playlist";
+          final list = songs.map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s)).toList();
+          return {'name': name, 'songs': list};
+        }
+      }
+    } catch (e) {
+      print("Error fetching remote playlists in _findPlaylistContextFor: $e");
+    }
+
+    // 3. Fallback to all library songs
+    try {
+      final allLibrary = await _api.getSongs();
+      final list = allLibrary.map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s)).toList();
+      return {'name': "Music Library", 'songs': list};
+    } catch (e) {
+      print("Error fetching all library songs in _findPlaylistContextFor: $e");
+    }
+
+    return {'name': "Music Library", 'songs': [song]};
+  }
+
   void toggleShuffle() {
     final nextShuffle = !state.shuffle;
     List<Map<String, dynamic>> newActive = List.from(state.originalPlaylist);
     
     if (nextShuffle) {
-      // Seed a randomized queue
-      newActive.shuffle();
+      _secureShuffle(newActive);
       if (state.currentSong != null) {
         newActive.removeWhere((s) => s["id"] == state.currentSong!["id"]);
         newActive.insert(0, state.currentSong!);
@@ -230,37 +301,55 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     globalAudioHandler.player.setVolume(vol);
   }
 
-  void handleNext() {
+  Future<void> handleNext() async {
     if (state.currentSong == null) return;
 
-    // 1. Check if there are items in the manual queue
+    // RULE 1 - QUEUE PLAYS ACROSS PLAYLISTS
     if (state.queue.isNotEmpty) {
       final nextSong = state.queue.first;
       final remainingQueue = List<Map<String, dynamic>>.from(state.queue)..removeAt(0);
       state = state.copyWith(queue: remainingQueue);
       
-      // Play the song (keeping activePlaylist and originalPlaylist intact)
-      playSong(nextSong, state.originalPlaylist);
+      final contextResult = await _findPlaylistContextFor(nextSong);
+      final plName = contextResult['name'] as String;
+      final plSongs = contextResult['songs'] as List<Map<String, dynamic>>;
+      
+      await playSong(nextSong, plSongs, playlistName: plName);
       return;
     }
 
-    // 2. Otherwise play the next song in the active playlist
+    // RULE 2 - CURRENT PLAYLIST PLAYS THROUGH COMPLETELY
     if (state.activePlaylist.isEmpty) return;
     int idx = state.activePlaylist.indexWhere((s) => s["id"] == state.currentSong!["id"]);
     
     if (idx != -1) {
       int nextIdx = idx + 1;
       if (nextIdx >= state.activePlaylist.length) {
+        // RULE 5 - Loop/Repeat checks
         if (state.repeat == "all") {
           nextIdx = 0;
+          await playSong(state.activePlaylist[nextIdx], state.originalPlaylist);
         } else {
-          // If repeat is off or single, stop playback at end of queue
-          globalAudioHandler.pause();
-          seek(Duration.zero);
-          return;
+          // RULE 3 & 4 - WHAT HAPPENS WHEN PLAYLIST ENDS
+          final allLibrary = await _api.getSongs();
+          if (allLibrary.isEmpty) {
+            globalAudioHandler.pause();
+            seek(Duration.zero);
+            return;
+          }
+          
+          final rand = Random.secure();
+          final randomSong = Map<String, dynamic>.from(allLibrary[rand.nextInt(allLibrary.length)]);
+          
+          final contextResult = await _findPlaylistContextFor(randomSong);
+          final plName = contextResult['name'] as String;
+          final plSongs = contextResult['songs'] as List<Map<String, dynamic>>;
+          
+          await playSong(randomSong, plSongs, playlistName: plName);
         }
+      } else {
+        await playSong(state.activePlaylist[nextIdx], state.originalPlaylist);
       }
-      playSong(state.activePlaylist[nextIdx], state.originalPlaylist);
     }
   }
 

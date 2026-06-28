@@ -1,4 +1,3 @@
-import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,8 +6,6 @@ import 'services/audio_handler.dart';
 import 'services/offline_storage.dart';
 import 'providers/player_provider.dart';
 import 'screens/setup_screen.dart';
-import 'screens/now_playing_screen.dart';
-import 'widgets/mini_player.dart';
 
 // Global navigator key so the mini-player overlay can show modal sheets
 // even when the context is above the navigator tree.
@@ -76,8 +73,6 @@ class SondraApp extends StatelessWidget {
         return Consumer(
           builder: (ctx, ref, _) {
             final playerState = ref.watch(playerProvider);
-            final showNowPlaying = ref.watch(showNowPlayingProvider);
-            final hasSong = playerState.currentSong != null;
 
             // Wrap in a global Focus widget to handle global Spacebar & 'P' keyboard shortcuts
             return Focus(
@@ -133,40 +128,7 @@ class SondraApp extends StatelessWidget {
 
                   // Android mobile floating mini-player overlay.
                   // Windows uses its own inline layout in HomeScreen.
-                  if (hasSong && !Platform.isWindows && !showNowPlaying)
-                    Positioned(
-                      left: 8,
-                      right: 8,
-                      bottom: MediaQuery.of(context).padding.bottom + 8,
-                      child: MiniPlayer(
-                        onTap: () {
-                          if (showNowPlaying) return;
-                          ref.read(showNowPlayingProvider.notifier).state = true;
-                          final nav = rootNavigatorKey.currentState;
-                          if (nav == null) return;
-                          Navigator.of(nav.context).push(
-                            PageRouteBuilder(
-                              opaque: true,
-                              pageBuilder: (_, __, ___) => const NowPlayingScreen(),
-                              transitionsBuilder: (_, animation, __, child) {
-                                return SlideTransition(
-                                  position: Tween<Offset>(
-                                    begin: const Offset(0, 1),
-                                    end: Offset.zero,
-                                  ).animate(CurvedAnimation(
-                                    parent: animation,
-                                    curve: Curves.easeOutCubic,
-                                  )),
-                                  child: child,
-                                );
-                              },
-                            ),
-                          ).then((_) {
-                            ref.read(showNowPlayingProvider.notifier).state = false;
-                          });
-                        },
-                      ),
-                    ),
+
                 ],
               ),
             );

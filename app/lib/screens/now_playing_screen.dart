@@ -41,7 +41,7 @@ class NowPlayingScreen extends ConsumerWidget {
       body: SafeArea(
         child: Column(
           children: [
-            // Top bar with down-arrow dismiss
+            // Top bar with down-arrow dismiss and playlist title
             SizedBox(
               height: 48,
               child: Row(
@@ -49,6 +49,21 @@ class NowPlayingScreen extends ConsumerWidget {
                   IconButton(
                     icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white, size: 28),
                     onPressed: () => Navigator.of(context).pop(),
+                  ),
+                  const Spacer(),
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text(
+                        "PLAYING FROM PLAYLIST",
+                        style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1.0),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        playerState.activePlaylistName,
+                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                    ],
                   ),
                   const Spacer(),
                   IconButton(
@@ -150,8 +165,9 @@ class NowPlayingScreen extends ConsumerWidget {
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 IconButton(
-                  icon: Icon(Icons.shuffle_rounded, color: playerState.shuffle ? const Color(0xFF8B5CF6) : Colors.white38, size: 24),
+                  icon: Icon(Icons.shuffle_rounded, color: playerState.shuffle ? const Color(0xFF8B5CF6) : Colors.white70, size: 28),
                   onPressed: () => notifier.toggleShuffle(),
+                  tooltip: playerState.shuffle ? "Disable Shuffle" : "Enable Shuffle",
                 ),
                 IconButton(
                   icon: const Icon(Icons.skip_previous_rounded, color: Colors.white, size: 36),
@@ -232,7 +248,15 @@ class NowPlayingScreen extends ConsumerWidget {
             ref.read(showNowPlayingProvider.notifier).state = false;
           },
         ),
-        title: const Text("Now Playing", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Now Playing", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 2),
+            Text("from: ${playerState.activePlaylistName}", style: const TextStyle(color: Colors.white38, fontSize: 11)),
+          ],
+        ),
       ),
       body: Row(
         children: [
@@ -289,10 +313,11 @@ class NowPlayingScreen extends ConsumerWidget {
                       IconButton(
                         icon: Icon(
                           Icons.shuffle_rounded,
-                          color: playerState.shuffle ? const Color(0xFF8B5CF6) : Colors.white38,
-                          size: 22,
+                          color: playerState.shuffle ? const Color(0xFF8B5CF6) : Colors.white70,
+                          size: 26,
                         ),
                         onPressed: () => notifier.toggleShuffle(),
+                        tooltip: playerState.shuffle ? "Disable Shuffle" : "Enable Shuffle",
                       ),
                       const SizedBox(width: 8),
                       IconButton(
@@ -532,7 +557,17 @@ class NowPlayingRightPanel extends ConsumerWidget {
             child: Row(
               children: [
                 const SizedBox(width: 16),
-                const Text("Now Playing", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("Now Playing", style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 2),
+                      Text("from: ${playerState.activePlaylistName}", style: const TextStyle(color: Colors.white38, fontSize: 10), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
                 const Spacer(),
                 IconButton(
                   icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 22),
@@ -612,8 +647,9 @@ class NowPlayingRightPanel extends ConsumerWidget {
             children: [
               IconButton(
                 icon: Icon(Icons.shuffle_rounded,
-                    color: playerState.shuffle ? const Color(0xFF8B5CF6) : Colors.white38, size: 20),
+                    color: playerState.shuffle ? const Color(0xFF8B5CF6) : Colors.white70, size: 24),
                 onPressed: () => notifier.toggleShuffle(),
+                tooltip: playerState.shuffle ? "Disable Shuffle" : "Enable Shuffle",
               ),
               const SizedBox(width: 4),
               IconButton(
