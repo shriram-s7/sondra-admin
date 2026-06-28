@@ -1175,6 +1175,7 @@ class _PlaylistDetailScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final playerState = ref.watch(playerProvider);
     final bottomPad = playerState.currentSong != null ? (Platform.isWindows ? 90.0 : 76.0) : 0.0;
+    final hasSong = playerState.currentSong != null;
 
     return Scaffold(
       backgroundColor: const Color(0xFF08070D),
@@ -1183,10 +1184,13 @@ class _PlaylistDetailScreen extends ConsumerWidget {
         foregroundColor: Colors.white,
         elevation: 0,
       ),
-      body: ListView.builder(
-        padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
-        itemCount: songs.length + 1,
-        itemBuilder: (ctx, idx) {
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
+              itemCount: songs.length + 1,
+              itemBuilder: (ctx, idx) {
           if (idx == 0) {
             return _PlaylistHeaderSection(name: name, songs: songs);
           }
@@ -1236,6 +1240,25 @@ class _PlaylistDetailScreen extends ConsumerWidget {
           );
         },
       ),
+    ),
+    if (!Platform.isWindows && hasSong)
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+        child: MiniPlayer(
+          onTap: () {
+            ref.read(showNowPlayingProvider.notifier).state = true;
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const NowPlayingScreen(),
+              ),
+            ).then((_) {
+              ref.read(showNowPlayingProvider.notifier).state = false;
+            });
+          },
+        ),
+      ),
+    ],
+    ),
     );
   }
 }
@@ -1394,11 +1417,9 @@ class _PlaylistHeaderSection extends ConsumerWidget {
               ),
               const SizedBox(width: 12),
               OutlinedButton.icon(
-                onPressed: songs.isEmpty
-                    ? null
-                    : () {
-                        ref.read(playerProvider.notifier).playPlaylistShuffled(songs, name);
-                      },
+                onPressed: () {
+                  ref.read(playerProvider.notifier).toggleShuffle();
+                },
                 style: OutlinedButton.styleFrom(
                   foregroundColor: isShuffled ? const Color(0xFF8B5CF6) : Colors.white,
                   side: BorderSide(

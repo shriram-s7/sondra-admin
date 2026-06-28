@@ -7,6 +7,8 @@ import '../services/download_manager.dart';
 import '../providers/player_provider.dart';
 import '../widgets/song_cover.dart';
 import '../widgets/song_options_menu.dart';
+import '../widgets/mini_player.dart';
+import 'now_playing_screen.dart';
 
 class OfflinePlaylistScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> playlist;
@@ -139,7 +141,10 @@ class _OfflinePlaylistScreenState
         ],
         elevation: 0,
       ),
-      body: ListView.builder(
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
         padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 16),
         itemCount: songs.length + 1,
         itemBuilder: (ctx, idx) {
@@ -305,6 +310,25 @@ class _OfflinePlaylistScreenState
 
               },
             ),
+          ),
+          if (!Platform.isWindows && playerState.currentSong != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+              child: MiniPlayer(
+                onTap: () {
+                  ref.read(showNowPlayingProvider.notifier).state = true;
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const NowPlayingScreen(),
+                    ),
+                  ).then((_) {
+                    ref.read(showNowPlayingProvider.notifier).state = false;
+                  });
+                },
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -363,7 +387,9 @@ class _OfflinePlaylistScreenState
               ),
               const SizedBox(width: 12),
               OutlinedButton.icon(
-                onPressed: songs.isEmpty ? null : _shufflePlay,
+                onPressed: () {
+                   ref.read(playerProvider.notifier).toggleShuffle();
+                 },
                 style: OutlinedButton.styleFrom(
                   foregroundColor: isShuffled ? const Color(0xFF8B5CF6) : Colors.white,
                   side: BorderSide(
