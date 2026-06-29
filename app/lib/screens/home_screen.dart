@@ -44,6 +44,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _isSyncingLocal = false;
   Map<String, dynamic>? _selectedPlaylistWindows;
   Map<String, dynamic>? _selectedOfflinePlaylistWindows;
+  bool _isLibraryExpanded = false;
+  bool _isPersonalExpanded = false;
+  bool _isOfflineExpanded = false;
 
   @override
   void initState() {
@@ -164,20 +167,40 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   // ── Desktop Layout: sidebar + content + optional right now-playing panel
   Widget _buildDesktopLayout(bool showNowPlayingWindows) {
+    Widget content;
+    if (_selectedPlaylistWindows != null) {
+      final pl = _selectedPlaylistWindows!;
+      final pSongs = List<Map<String, dynamic>>.from(pl["songs"] ?? []);
+      content = _PlaylistDetailScreenInline(
+        name: pl["name"] ?? "Playlist",
+        songs: pSongs,
+        onBack: () => setState(() => _selectedPlaylistWindows = null),
+      );
+    } else if (_selectedOfflinePlaylistWindows != null) {
+      final plId = _selectedOfflinePlaylistWindows!['id'] as int;
+      final pl = OfflineStorage().getPlaylist(plId) ?? _selectedOfflinePlaylistWindows!;
+      content = OfflinePlaylistScreen(
+        playlist: pl,
+        onBack: () => setState(() => _selectedOfflinePlaylistWindows = null),
+        onPlaylistChanged: () => setState(() {}),
+        key: ValueKey(plId),
+      );
+    } else {
+      content = IndexedStack(
+        index: _currentIndex,
+        children: [
+          _buildHomeTab(),
+          _buildLibraryTab(),
+          const SizedBox.shrink(), // Index 2 placeholder since tab is removed on Windows
+          _buildSettingsTab(),
+        ],
+      );
+    }
+
     return Row(
       children: [
         _buildSidebar(),
-        Expanded(
-          child: IndexedStack(
-            index: _currentIndex,
-            children: [
-              _buildHomeTab(),
-              _buildLibraryTab(),
-              _buildPlaylistsTab(),
-              _buildSettingsTab(),
-            ],
-          ),
-        ),
+        Expanded(child: content),
         if (showNowPlayingWindows)
           NowPlayingRightPanel(
             onClose: () {
@@ -190,8 +213,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   // ── Left Sidebar (Windows only)
   Widget _buildSidebar() {
+    final playlistsAsync = ref.watch(playlistsProvider);
+    final allLocalPlaylists = OfflineStorage().getPlaylists();
+    final personalPlaylists = allLocalPlaylists.where((p) => p['type'] == 'personal').toList();
+    final offlinePlaylists = allLocalPlaylists.where((p) => p['type'] == 'offline').toList();
+
     return Container(
-      width: 180,
+      width: 220,
       color: const Color(0xFF111019),
       child: Column(
         children: [
@@ -204,11 +232,100 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               const Text("Sondra", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
             ],
           ),
-          const SizedBox(height: 28),
-          _sidebarItem(Icons.home_rounded, "Home", 0),
-          _sidebarItem(Icons.music_note_rounded, "Song Pool", 1),
-          _sidebarItem(Icons.list_rounded, "Playlists", 2),
-          const Spacer(),
+          const SizedBox(height: 20),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _sidebarItem(Icons.home_rounded, "Home", 0),
+                  _sidebarItem(Icons.music_note_rounded, "Song Pool", 1),
+                  const SizedBox(height: 12),
+                  const Divider(color: Colors.white10, height: 1),
+                  const SizedBox(height: 12),
+                  
+                  // My Library Playlists Dropdown
+                  _buildDropdownHeader(
+                    label: "My Library Playlists",
+                    isExpanded: _isLibraryExpanded,
+                    onToggle: () => setState(() => _isLibraryExpanded = !_isLibraryExpanded),
+                  ),
+                  if (_isLibraryExpanded)
+                    playlistsAsync.when(
+                      data: (lists) {
+                        if (lists.isEmpty) {
+                          return const Padding(
+                            padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
+                            child: Text("No playlists", style: TextStyle(color: Colors.white30, fontSize: 12)),
+                          );
+                        }
+                        return Column(
+                          children: lists.map<Widget>((pl) {
+                            final isSelected = _selectedPlaylistWindows != null && _selectedPlaylistWindows!["name"] == pl["name"];
+                            return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
+                              setState(() {
+                                _selectedPlaylistWindows = pl;
+                                _selectedOfflinePlaylistWindows = null;
+                              });
+                            });
+                          }).toList(),
+                        );
+                      },
+                      loading: () => const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF8B5CF6)))),
+                      ),
+                      error: (e, s) => Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Text("Error: $e", style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+
+                  // Personal Playlists Dropdown
+                  _buildDropdownHeader(
+                    label: "Personal Playlists",
+                    isExpanded: _isPersonalExpanded,
+                    onToggle: () => setState(() => _isPersonalExpanded = !_isPersonalExpanded),
+                  ),
+                  if (_isPersonalExpanded) ...[
+                    ...personalPlaylists.map<Widget>((pl) {
+                      final isSelected = _selectedOfflinePlaylistWindows != null && _selectedOfflinePlaylistWindows!["id"] == pl["id"];
+                      return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
+                        setState(() {
+                          _selectedOfflinePlaylistWindows = pl;
+                          _selectedPlaylistWindows = null;
+                        });
+                      });
+                    }),
+                    _sidebarCreateNewButton("Create New", () => _createPersonalPlaylist()),
+                  ],
+                  const SizedBox(height: 8),
+
+                  // Offline Playlists Dropdown
+                  _buildDropdownHeader(
+                    label: "Offline Playlists",
+                    isExpanded: _isOfflineExpanded,
+                    onToggle: () => setState(() => _isOfflineExpanded = !_isOfflineExpanded),
+                  ),
+                  if (_isOfflineExpanded) ...[
+                    ...offlinePlaylists.map<Widget>((pl) {
+                      final isSelected = _selectedOfflinePlaylistWindows != null && _selectedOfflinePlaylistWindows!["id"] == pl["id"];
+                      return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
+                        setState(() {
+                          _selectedOfflinePlaylistWindows = pl;
+                          _selectedPlaylistWindows = null;
+                        });
+                      });
+                    }),
+                    _sidebarCreateNewButton("Create New", () => _createOfflinePlaylist()),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const Divider(color: Colors.white10, height: 1),
           _sidebarItem(Icons.settings_rounded, "Settings", 3),
           const SizedBox(height: 16),
         ],
@@ -217,7 +334,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Widget _sidebarItem(IconData icon, String label, int index) {
-    final selected = _currentIndex == index;
+    final selected = _selectedPlaylistWindows == null && _selectedOfflinePlaylistWindows == null && _currentIndex == index;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       decoration: BoxDecoration(
@@ -229,9 +346,109 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         visualDensity: VisualDensity.compact,
         leading: Icon(icon, color: selected ? const Color(0xFF8B5CF6) : Colors.white60, size: 20),
         title: Text(label, style: TextStyle(color: selected ? Colors.white : Colors.white60, fontSize: 13, fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
-        onTap: () => setState(() { _currentIndex = index; }),
+        onTap: () => setState(() {
+          _currentIndex = index;
+          _selectedPlaylistWindows = null;
+          _selectedOfflinePlaylistWindows = null;
+        }),
       ),
     );
+  }
+
+  Widget _buildDropdownHeader({required String label, required bool isExpanded, required VoidCallback onToggle}) {
+    return InkWell(
+      onTap: onToggle,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            AnimatedRotation(
+              turns: isExpanded ? 0.25 : 0.0,
+              duration: const Duration(milliseconds: 200),
+              child: const Icon(Icons.keyboard_arrow_right_rounded, color: Colors.white54, size: 18),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sidebarPlaylistItem(String name, bool isSelected, VoidCallback onTap) {
+    return Container(
+      margin: const EdgeInsets.only(left: 12, right: 6, top: 1, bottom: 1),
+      decoration: BoxDecoration(
+        color: isSelected ? const Color(0xFF8B5CF6).withOpacity(0.15) : Colors.transparent,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            children: [
+              Icon(Icons.playlist_play_rounded, color: isSelected ? const Color(0xFF8B5CF6) : Colors.white30, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  name,
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : Colors.white60,
+                    fontSize: 12,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sidebarCreateNewButton(String label, VoidCallback onTap) {
+    return Container(
+      margin: const EdgeInsets.only(left: 12, right: 6, top: 2, bottom: 2),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            children: [
+              const Icon(Icons.add_rounded, color: Color(0xFF8B5CF6), size: 16),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Color(0xFF8B5CF6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _createOfflinePlaylist() async {
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen()),
+    );
+    if (created == true && mounted) setState(() {});
   }
 
   // --- TAB BUILDERS ---
@@ -1451,6 +1668,24 @@ class _PlaylistHeaderSection extends ConsumerWidget {
                   ),
                 ),
               ),
+              if (Platform.isWindows) ...[
+                const SizedBox(width: 12),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
+                  color: const Color(0xFF1C1A25),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  onSelected: (_) {},
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      enabled: false,
+                      child: Text(
+                        "Synced from Google Drive",
+                        style: TextStyle(color: Colors.white54, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ],

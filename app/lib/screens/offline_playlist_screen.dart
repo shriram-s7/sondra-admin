@@ -14,8 +14,14 @@ import '../services/api_service.dart';
 class OfflinePlaylistScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> playlist;
   final VoidCallback? onBack;
+  final VoidCallback? onPlaylistChanged;
 
-  const OfflinePlaylistScreen({super.key, required this.playlist, this.onBack});
+  const OfflinePlaylistScreen({
+    super.key,
+    required this.playlist,
+    this.onBack,
+    this.onPlaylistChanged,
+  });
 
   @override
   ConsumerState<OfflinePlaylistScreen> createState() =>
@@ -45,6 +51,44 @@ class _OfflinePlaylistScreenState
       setState(() {
         _playlist = updated;
       });
+      widget.onPlaylistChanged?.call();
+    }
+  }
+
+  Future<void> _renamePlaylist() async {
+    final controller = TextEditingController(text: _playlist['name'] ?? '');
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF111019),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Rename Playlist", style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: "Playlist Name",
+            hintStyle: TextStyle(color: Colors.white30),
+            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF8B5CF6))),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text("Rename", style: TextStyle(color: Color(0xFF8B5CF6))),
+          ),
+        ],
+      ),
+    );
+
+    if (newName != null && newName.isNotEmpty) {
+      await OfflineStorage().renamePlaylist(_playlist['id'] as int, newName);
+      _refreshPlaylist();
     }
   }
 
@@ -63,6 +107,7 @@ class _OfflinePlaylistScreenState
     final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
     await _downloadManager.deleteAllPlaylistFiles(songs);
     await OfflineStorage().deletePlaylist(_playlist['id'] as int);
+    widget.onPlaylistChanged?.call();
     if (mounted) {
       if (widget.onBack != null) {
         widget.onBack!();
@@ -118,7 +163,7 @@ class _OfflinePlaylistScreenState
                 onPressed: widget.onBack,
               )
             : null,
-        actions: [
+        actions: Platform.isWindows ? [] : [
           if (_playlist['type'] == 'personal' || _playlist['type'] == 'offline')
             IconButton(
               onPressed: _showAddSongsSheet,
@@ -376,6 +421,61 @@ class _OfflinePlaylistScreenState
     );
   }
 
+  List<PopupMenuEntry<String>> _buildWindowsHeaderMenuItems() {
+    final isOffline = _playlist['type'] == 'offline';
+    final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
+    final hasPendingDownloads = songs.any((s) => s['status'] == 'downloading');
+    final hasNotDownloaded = songs.any((s) => s['status'] == 'notDownloaded');
+
+    return [
+      const PopupMenuItem(
+        value: 'add',
+        child: ListTile(
+          leading: Icon(Icons.playlist_add_rounded, color: Color(0xFF8B5CF6), size: 20),
+          title: Text("Add Songs", style: TextStyle(color: Colors.white, fontSize: 13)),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+        ),
+      ),
+      if (isOffline && hasNotDownloaded)
+        PopupMenuItem(
+          value: 'download_all',
+          enabled: !hasPendingDownloads,
+          child: ListTile(
+            leading: Icon(
+              hasPendingDownloads ? Icons.hourglass_empty_rounded : Icons.download_rounded,
+              color: const Color(0xFF8B5CF6),
+              size: 20,
+            ),
+            title: Text(
+              hasPendingDownloads ? "Downloading..." : "Download All",
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+            ),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+      const PopupMenuItem(
+        value: 'rename',
+        child: ListTile(
+          leading: Icon(Icons.edit_rounded, color: Colors.white, size: 20),
+          title: Text("Rename Playlist", style: TextStyle(color: Colors.white, fontSize: 13)),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+        ),
+      ),
+      const PopupMenuItem(
+        value: 'delete',
+        child: ListTile(
+          leading: Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20),
+          title: Text("Delete Playlist", style: TextStyle(color: Colors.redAccent, fontSize: 13)),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+        ),
+      ),
+    ];
+  }
+
   Widget _buildPlaylistHeader({
     required String name,
     required List<Map<String, dynamic>> songs,
@@ -456,6 +556,26 @@ class _OfflinePlaylistScreenState
                   ),
                 ),
               ),
+              if (Platform.isWindows) ...[
+                const SizedBox(width: 12),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
+                  color: const Color(0xFF1C1A25),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  onSelected: (value) async {
+                    if (value == 'add') {
+                      _showAddSongsSheet();
+                    } else if (value == 'download_all') {
+                      _downloadAll();
+                    } else if (value == 'rename') {
+                      _renamePlaylist();
+                    } else if (value == 'delete') {
+                      _deletePlaylist();
+                    }
+                  },
+                  itemBuilder: (_) => _buildWindowsHeaderMenuItems(),
+                ),
+              ],
             ],
           ),
         ],
