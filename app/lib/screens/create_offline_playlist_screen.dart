@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../services/api_service.dart';
 import '../services/offline_storage.dart';
-import '../widgets/song_cover.dart';
+import '../widgets/song_picker.dart';
 
 class CreateOfflinePlaylistScreen extends ConsumerStatefulWidget {
-  const CreateOfflinePlaylistScreen({super.key});
+  final String type;
+
+  const CreateOfflinePlaylistScreen({super.key, this.type = 'offline'});
 
   @override
   ConsumerState<CreateOfflinePlaylistScreen> createState() =>
@@ -15,53 +16,31 @@ class CreateOfflinePlaylistScreen extends ConsumerStatefulWidget {
 class _CreateOfflinePlaylistScreenState
     extends ConsumerState<CreateOfflinePlaylistScreen> {
   final _nameController = TextEditingController();
-  final Set<int> _selectedSongIds = {};
-  List<Map<String, dynamic>> _allSongs = [];
-  bool _loadingSongs = true;
+  final _songPickerKey = GlobalKey<SongPickerWidgetState>();
   bool _creating = false;
+  bool _showSongPicker = false;
+
+  String get _typeLabel => widget.type == 'personal' ? 'Personal' : 'Offline';
 
   @override
   void initState() {
     super.initState();
     _nameController.addListener(() => setState(() {}));
-    _loadSongs();
   }
 
-  Future<void> _loadSongs() async {
-    try {
-      final songs = await ApiService().getSongs();
-      if (mounted) {
-        setState(() {
-          _allSongs = List<Map<String, dynamic>>.from(songs);
-          _loadingSongs = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loadingSongs = false;
-        });
-      }
-    }
-  }
+  Future<void> _onSongsConfirmed(List<Map<String, dynamic>> selectedSongs) async {
+    if (_creating) return;
+    setState(() => _creating = true);
 
-  Future<void> _createPlaylist() async {
     final name = _nameController.text.trim();
-    if (name.isEmpty) return;
-
-    setState(() {
-      _creating = true;
-    });
-
-    final selectedSongs =
-        _allSongs.where((s) => _selectedSongIds.contains(s['id'])).toList();
-
     final storage = OfflineStorage();
-    final playlist = await storage.createPlaylist(name, type: 'offline');
-    await storage.addSongsToPlaylist(playlist['id'] as int, selectedSongs);
+    final playlist = await storage.createPlaylist(name, type: widget.type);
+    if (selectedSongs.isNotEmpty) {
+      await storage.addSongsToPlaylist(playlist['id'] as int, selectedSongs);
+    }
 
     if (mounted) {
-      Navigator.of(context).pop(true);
+      Navigator.of(context).pop(playlist);
     }
   }
 
@@ -78,126 +57,104 @@ class _CreateOfflinePlaylistScreenState
       appBar: AppBar(
         backgroundColor: const Color(0xFF111019),
         foregroundColor: Colors.white,
-        title: const Text('Create Offline Playlist',
-            style: TextStyle(color: Colors.white)),
+        title: Text(
+          _showSongPicker ? 'Select Songs' : 'Create $_typeLabel Playlist',
+          style: const TextStyle(color: Colors.white),
+        ),
         elevation: 0,
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: TextField(
-              controller: _nameController,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: 'Playlist name',
-                hintStyle: const TextStyle(color: Colors.white24),
-                filled: true,
-                fillColor: Colors.white.withOpacity(0.05),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
-                ),
+      body: _showSongPicker ? _buildSongPicker() : _buildNameStep(),
+    );
+  }
+
+  Widget _buildNameStep() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: TextField(
+            controller: _nameController,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Playlist name',
+              hintStyle: const TextStyle(color: Colors.white24),
+              filled: true,
+              fillColor: Colors.white.withOpacity(0.05),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
               ),
             ),
+            autofocus: true,
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Select Songs (${_selectedSongIds.length})',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                ElevatedButton(
-                  onPressed:
-                      _nameController.text.trim().isEmpty || _selectedSongIds.isEmpty || _creating
-                          ? null
-                          : _createPlaylist,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF8B5CF6),
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor:
-                        const Color(0xFF8B5CF6).withOpacity(0.3),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 20, vertical: 10),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                  ),
-                  child: _creating
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Text('Create'),
-                ),
-              ],
+        ),
+        const Spacer(),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _nameController.text.trim().isEmpty ? null : () {
+                setState(() => _showSongPicker = true);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8B5CF6),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Next', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
           ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: _loadingSongs
-                ? const Center(
-                    child: CircularProgressIndicator(
-                        color: Color(0xFF8B5CF6)))
-                : ListView.builder(
-                    itemCount: _allSongs.length,
-                    itemBuilder: (context, index) {
-                      final song = _allSongs[index];
-                      final isSelected =
-                          _selectedSongIds.contains(song['id']);
-                      return ListTile(
-                        onTap: () {
-                          setState(() {
-                            if (isSelected) {
-                              _selectedSongIds.remove(song['id']);
-                            } else {
-                              _selectedSongIds.add(song['id'] as int);
-                            }
-                          });
-                        },
-                        leading: SongCoverWidget(
-                          song: song,
-                          width: 40,
-                          height: 40,
-                          borderRadius: 4.0,
-                        ),
-                        title: Text(
-                          song['title'] ?? 'Unknown Track',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500),
-                        ),
-                        subtitle: Text(
-                          song['artist'] ?? 'Unknown Artist',
-                          style:
-                              const TextStyle(color: Colors.white38, fontSize: 12),
-                        ),
-                        trailing: Icon(
-                          isSelected
-                              ? Icons.check_circle_rounded
-                              : Icons.radio_button_unchecked_rounded,
-                          color: isSelected
-                              ? const Color(0xFF8B5CF6)
-                              : Colors.white24,
-                        ),
-                      );
-                    },
-                  ),
+        ),
+        const SizedBox(height: 32),
+      ],
+    );
+  }
+
+  Widget _buildSongPicker() {
+    return Column(
+      children: [
+        Expanded(
+          child: SongPickerWidget(
+            key: _songPickerKey,
+            showLoading: true,
           ),
-        ],
-      ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _creating
+                  ? null
+                  : () {
+                      final selected = _songPickerKey.currentState?.selectedSongs ?? [];
+                      _onSongsConfirmed(selected);
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8B5CF6),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: _creating
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Create Playlist', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

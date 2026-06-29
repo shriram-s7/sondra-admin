@@ -446,11 +446,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
+  Future<void> _navigateToPlaylist(Map<String, dynamic> playlist) async {
+    if (Platform.isWindows) {
+      setState(() => _selectedOfflinePlaylistWindows = playlist);
+    } else {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => OfflinePlaylistScreen(
+            playlist: playlist,
+            key: ValueKey(playlist['id']),
+          ),
+        ),
+      );
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> _createOfflinePlaylist() async {
-    final created = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen()),
+    final created = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen(type: 'offline')),
     );
-    if (created == true && mounted) setState(() {});
+    if (created != null && mounted) {
+      _navigateToPlaylist(created);
+    }
   }
 
   // --- TAB BUILDERS ---
@@ -797,10 +815,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       trailing: IconButton(
                         icon: const Icon(Icons.add_circle_rounded, color: Color(0xFF10B981), size: 22),
                         onPressed: () async {
-                          final created = await Navigator.of(context).push<bool>(
-                            MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen()),
+                          final created = await Navigator.of(context).push<Map<String, dynamic>>(
+                            MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen(type: 'offline')),
                           );
-                          if (created == true && mounted) setState(() {});
+                          if (created != null && mounted) {
+                            _navigateToPlaylist(created);
+                          }
                         },
                         tooltip: "Create Offline Playlist",
                         padding: EdgeInsets.zero,
@@ -884,33 +904,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _createPersonalPlaylist() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF111019),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text("Create Personal Playlist", style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: controller,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            hintText: "Playlist Name",
-            hintStyle: TextStyle(color: Colors.white30),
-            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF8B5CF6))),
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("Cancel", style: TextStyle(color: Colors.white54))),
-          TextButton(onPressed: () => Navigator.of(ctx).pop(controller.text.trim()), child: const Text("Create", style: TextStyle(color: Color(0xFF8B5CF6)))),
-        ],
-      ),
+    final created = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen(type: 'personal')),
     );
-
-    if (name != null && name.isNotEmpty) {
-      await OfflineStorage().createPlaylist(name, type: 'personal');
-      if (mounted) setState(() {});
+    if (created != null && mounted) {
+      _navigateToPlaylist(created);
     }
   }
 
@@ -1425,12 +1423,12 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
                       children: [
                         CommonPlaylistHeader(
                           name: widget.name,
-                          songCount: widget.songs.length,
+                          songCount: filteredSongs.length,
                           isShuffled: playerState.shuffle,
-                          onPlayAll: widget.songs.isEmpty
+                          onPlayAll: filteredSongs.isEmpty
                               ? null
                               : () {
-                                  ref.read(playerProvider.notifier).playSong(widget.songs.first, widget.songs, playlistName: widget.name);
+                                  ref.read(playerProvider.notifier).playSong(filteredSongs.first, filteredSongs, playlistName: widget.name);
                                 },
                           onToggleShuffle: () {
                             ref.read(playerProvider.notifier).toggleShuffle();
@@ -1492,7 +1490,7 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
                       }
                     },
                     child: ListTile(
-                      onTap: () => ref.read(playerProvider.notifier).playSong(s, widget.songs, playlistName: widget.name),
+                      onTap: () => ref.read(playerProvider.notifier).playSong(s, filteredSongs, playlistName: widget.name),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       leading: SongCoverWidget(
                         song: s,
@@ -1609,12 +1607,12 @@ class _PlaylistDetailScreenInlineState extends ConsumerState<_PlaylistDetailScre
               children: [
                 CommonPlaylistHeader(
                   name: widget.name,
-                  songCount: widget.songs.length,
+                  songCount: filteredSongs.length,
                   isShuffled: playerState.shuffle,
-                  onPlayAll: widget.songs.isEmpty
+                  onPlayAll: filteredSongs.isEmpty
                       ? null
                       : () {
-                          ref.read(playerProvider.notifier).playSong(widget.songs.first, widget.songs, playlistName: widget.name);
+                          ref.read(playerProvider.notifier).playSong(filteredSongs.first, filteredSongs, playlistName: widget.name);
                         },
                   onToggleShuffle: () {
                     ref.read(playerProvider.notifier).toggleShuffle();
@@ -1676,7 +1674,7 @@ class _PlaylistDetailScreenInlineState extends ConsumerState<_PlaylistDetailScre
               }
             },
             child: ListTile(
-              onTap: () => ref.read(playerProvider.notifier).playSong(s, widget.songs, playlistName: widget.name),
+              onTap: () => ref.read(playerProvider.notifier).playSong(s, filteredSongs, playlistName: widget.name),
               contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               leading: SongCoverWidget(
                 song: s,

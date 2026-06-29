@@ -116,26 +116,8 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       }
     });
 
-    // Register Media / Earbud skip controls callback from background handler
-    // CHANGE 5: 600ms debounce prevents double-tap earbud from firing twice
-    globalAudioHandler.onSkipToNext = () async {
-      final now = DateTime.now();
-      if (_lastActionTime != null &&
-          now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
-        return;
-      }
-      _lastActionTime = now;
-      handleNext();
-    };
-    globalAudioHandler.onSkipToPrevious = () async {
-      final now = DateTime.now();
-      if (_lastActionTime != null &&
-          now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
-        return;
-      }
-      _lastActionTime = now;
-      handlePrev();
-    };
+    globalAudioHandler.onSkipToNext = () => handleNext();
+    globalAudioHandler.onSkipToPrevious = () => handlePrev();
   }
 
   Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName, bool internalCall = false}) async {
@@ -368,14 +350,21 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       if (idx != -1) {
         int nextIdx = idx + 1;
         if (nextIdx >= state.activePlaylist.length) {
-          // RULE 5 - Loop/Repeat checks
-          if (state.repeat == "all") {
-            nextIdx = 0;
-            await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
-          } else {
-            // End of playlist: stop playback and reset position
-            await globalAudioHandler.pause();
-            await seek(Duration.zero);
+          if (state.shuffle && state.originalPlaylist.isNotEmpty) {
+            // Shuffle mode: generate next valid shuffled playback sequence (or restart it)
+            final newShuffled = List<Map<String, dynamic>>.from(state.originalPlaylist);
+            _secureShuffle(newShuffled);
+            if (newShuffled.length > 1 && newShuffled.first["id"] == state.currentSong!["id"]) {
+              // Swap the first song with the second to avoid immediate repeat
+              final temp = newShuffled[0];
+              newShuffled[0] = newShuffled[1];
+              newShuffled[1] = temp;
+            }
+            state = state.copyWith(activePlaylist: newShuffled);
+            await playSong(newShuffled.first, state.originalPlaylist, internalCall: true);
+          } else if (state.activePlaylist.isNotEmpty) {
+            // Linear mode: loop back to the first song, looping forever
+            await playSong(state.activePlaylist[0], state.originalPlaylist, internalCall: true);
           }
         } else {
           await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);

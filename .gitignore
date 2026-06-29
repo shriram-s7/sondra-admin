@@ -42,6 +42,11 @@ app/windows/flutter/ephemeral/
 app/build/windows/
 app/build/windows/installer/
 
+# Build Artifacts
+admin_dist/
+sondra_windows/
+app-release.apk
+
 # Operating System Files
 .DS_Store
 Thumbs.db

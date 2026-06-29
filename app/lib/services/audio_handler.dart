@@ -10,7 +10,6 @@ class SondraAudioHandler extends BaseAudioHandler {
   SMTCWindows? _smtc;
   Future<void>? _initFuture;
   bool _isLoading = false;
-  DateTime? _lastSmtcAction;
 
   // Callbacks hooked by the Riverpod notifier
   Future<void> Function()? onSkipToNext;
@@ -48,13 +47,6 @@ class SondraAudioHandler extends BaseAudioHandler {
     
     // Listen to button press streams
     _smtc!.buttonPressStream.listen((event) async {
-      final now = DateTime.now();
-      if (_lastSmtcAction != null && 
-          now.difference(_lastSmtcAction!) < const Duration(milliseconds: 600)) {
-        return;
-      }
-      _lastSmtcAction = now;
-
       switch (event) {
         case PressedButton.play:
           play();
@@ -185,6 +177,25 @@ class SondraAudioHandler extends BaseAudioHandler {
   Future<void> skipToPrevious() async {
     if (onSkipToPrevious != null) {
       await onSkipToPrevious!();
+    }
+  }
+
+  @override
+  Future<void> click([MediaButton button = MediaButton.media]) async {
+    switch (button) {
+      case MediaButton.media:
+        if (playbackState.value.playing) {
+          await pause();
+        } else {
+          await play();
+        }
+        break;
+      case MediaButton.next:
+        await skipToNext();
+        break;
+      case MediaButton.previous:
+        await skipToPrevious();
+        break;
     }
   }
 

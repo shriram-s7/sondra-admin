@@ -9,9 +9,9 @@ import '../widgets/song_cover.dart';
 import '../widgets/song_options_menu.dart';
 import '../widgets/mini_player.dart';
 import 'now_playing_screen.dart';
-import '../services/api_service.dart';
 import '../widgets/playlist_search_bar.dart';
 import '../widgets/playlist_header.dart';
+import '../widgets/song_picker.dart';
 
 class OfflinePlaylistScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> playlist;
@@ -108,8 +108,34 @@ class _OfflinePlaylistScreenState
   }
 
   Future<void> _deletePlaylist() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF111019),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Delete Playlist", style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Are you sure you want to delete "${_playlist['name']}"?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text("Delete", style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
-    await _downloadManager.deleteAllPlaylistFiles(songs);
+    if (_playlist['type'] == 'offline') {
+      await _downloadManager.deleteAllPlaylistFiles(songs);
+    }
     await OfflineStorage().deletePlaylist(_playlist['id'] as int);
     widget.onPlaylistChanged?.call();
     if (mounted) {
@@ -121,10 +147,9 @@ class _OfflinePlaylistScreenState
     }
   }
 
-  void _playSong(Map<String, dynamic> songEntry) {
-    final allSongs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
+  void _playSong(Map<String, dynamic> songEntry, List<Map<String, dynamic>> activeList) {
     final song = _buildSongMap(songEntry);
-    final playlist = allSongs.map((s) => _buildSongMap(s)).toList();
+    final playlist = activeList.map((s) => _buildSongMap(s)).toList();
     ref.read(playerProvider.notifier).playSong(song, playlist, playlistName: _playlist['name']);
   }
 
@@ -193,10 +218,10 @@ class _OfflinePlaylistScreenState
                                   : OfflineStorage.formatBytes(snapshot.data ?? 0);
                               return CommonPlaylistHeader(
                                 name: _playlist['name'] ?? '',
-                                songCount: songs.length,
+                                songCount: filteredSongs.length,
                                 extraInfo: sizeStr,
                                 isShuffled: playerState.shuffle,
-                                onPlayAll: songs.isEmpty ? null : _playAll,
+                                onPlayAll: filteredSongs.isEmpty ? null : () => _playAll(filteredSongs),
                                 onToggleShuffle: () {
                                   ref.read(playerProvider.notifier).toggleShuffle();
                                 },
@@ -213,34 +238,32 @@ class _OfflinePlaylistScreenState
                                     });
                                   },
                                 ),
-                                trailingActions: Platform.isWindows
-                                    ? PopupMenuButton<String>(
-                                        icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
-                                        color: const Color(0xFF1C1A25),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                        onSelected: (value) async {
-                                          if (value == 'add') {
-                                            _showAddSongsSheet();
-                                          } else if (value == 'download_all') {
-                                            _downloadAll();
-                                          } else if (value == 'rename') {
-                                            _renamePlaylist();
-                                          } else if (value == 'delete') {
-                                            _deletePlaylist();
-                                          }
-                                        },
-                                        itemBuilder: (_) => _buildWindowsHeaderMenuItems(),
-                                      )
-                                    : null,
+                                trailingActions: PopupMenuButton<String>(
+                                  icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
+                                  color: const Color(0xFF1C1A25),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  onSelected: (value) async {
+                                    if (value == 'add') {
+                                      _showAddSongsSheet();
+                                    } else if (value == 'download_all') {
+                                      _downloadAll();
+                                    } else if (value == 'rename') {
+                                      _renamePlaylist();
+                                    } else if (value == 'delete') {
+                                      _deletePlaylist();
+                                    }
+                                  },
+                                  itemBuilder: (_) => _buildHeaderMenuItems(),
+                                ),
                               );
                             },
                           )
                         else
                           CommonPlaylistHeader(
                             name: _playlist['name'] ?? '',
-                            songCount: songs.length,
+                            songCount: filteredSongs.length,
                             isShuffled: playerState.shuffle,
-                            onPlayAll: songs.isEmpty ? null : _playAll,
+                            onPlayAll: filteredSongs.isEmpty ? null : () => _playAll(filteredSongs),
                             onToggleShuffle: () {
                               ref.read(playerProvider.notifier).toggleShuffle();
                             },
@@ -257,23 +280,21 @@ class _OfflinePlaylistScreenState
                                 });
                               },
                             ),
-                            trailingActions: Platform.isWindows
-                                ? PopupMenuButton<String>(
-                                    icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
-                                    color: const Color(0xFF1C1A25),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                    onSelected: (value) async {
-                                      if (value == 'add') {
-                                        _showAddSongsSheet();
-                                      } else if (value == 'rename') {
-                                        _renamePlaylist();
-                                      } else if (value == 'delete') {
-                                        _deletePlaylist();
-                                      }
-                                    },
-                                    itemBuilder: (_) => _buildWindowsHeaderMenuItems(),
-                                  )
-                                : null,
+                            trailingActions: PopupMenuButton<String>(
+                              icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
+                              color: const Color(0xFF1C1A25),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              onSelected: (value) async {
+                                if (value == 'add') {
+                                  _showAddSongsSheet();
+                                } else if (value == 'rename') {
+                                  _renamePlaylist();
+                                } else if (value == 'delete') {
+                                  _deletePlaylist();
+                                }
+                              },
+                              itemBuilder: (_) => _buildHeaderMenuItems(),
+                            ),
                           ),
                         if (songs.isEmpty)
                           const Padding(
@@ -321,7 +342,7 @@ class _OfflinePlaylistScreenState
                       }
                     },
                     child: ListTile(
-                      onTap: () => _playSong(entry),
+                      onTap: () => _playSong(entry, filteredSongs),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       leading: SongCoverWidget(
                         song: _buildSongMap(entry),
@@ -366,6 +387,37 @@ class _OfflinePlaylistScreenState
                               ),
                           ],
                           const SizedBox(width: 4),
+                          if ((_playlist['type'] == 'personal' || _playlist['type'] == 'offline') && _searchQuery.isEmpty) ...[
+                            if (idx - 1 > 0)
+                              IconButton(
+                                icon: const Icon(Icons.keyboard_arrow_up_rounded, color: Colors.white38, size: 20),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () async {
+                                  await OfflineStorage().reorderSong(
+                                    _playlist['id'] as int,
+                                    idx - 1,
+                                    idx - 2,
+                                  );
+                                  _refreshPlaylist();
+                                },
+                              ),
+                            if (idx - 1 < songs.length - 1)
+                              IconButton(
+                                icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white38, size: 20),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () async {
+                                  await OfflineStorage().reorderSong(
+                                    _playlist['id'] as int,
+                                    idx - 1,
+                                    idx,
+                                  );
+                                  _refreshPlaylist();
+                                },
+                              ),
+                            const SizedBox(width: 4),
+                          ],
                           SongOptionsButton(
                             song: _buildSongMap(entry),
                             playlistId: _playlist['id'],
@@ -401,7 +453,7 @@ class _OfflinePlaylistScreenState
     );
   }
 
-  List<PopupMenuEntry<String>> _buildWindowsHeaderMenuItems() {
+  List<PopupMenuEntry<String>> _buildHeaderMenuItems() {
     final isOffline = _playlist['type'] == 'offline';
     final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
     final hasPendingDownloads = songs.any((s) => s['status'] == 'downloading');
@@ -456,10 +508,9 @@ class _OfflinePlaylistScreenState
     ];
   }
 
-  void _playAll() {
-    final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
-    if (songs.isEmpty) return;
-    _playSong(songs.first);
+  void _playAll(List<Map<String, dynamic>> activeList) {
+    if (activeList.isEmpty) return;
+    _playSong(activeList.first, activeList);
   }
 
 
@@ -467,128 +518,67 @@ class _OfflinePlaylistScreenState
     final scaffoldContext = context;
     final currentSongs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
     final currentIds = currentSongs.map((s) => s['song_id'] as int).toSet();
-    final selectedSongs = <Map<String, dynamic>>[];
+    final pickerKey = GlobalKey<SongPickerWidgetState>();
 
-    await showModalBottomSheet<List<Map<String, dynamic>>>(
+    await showModalBottomSheet<Map<String, dynamic>>(
       context: scaffoldContext,
       backgroundColor: const Color(0xFF111019),
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setSheetState) {
-            return FutureBuilder<List<dynamic>>(
-              future: ApiService().getSongs(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const SizedBox(
-                    height: 200,
-                    child: Center(
-                      child: CircularProgressIndicator(color: Color(0xFF8B5CF6)),
-                    ),
-                  );
-                }
-                if (snapshot.hasError || !snapshot.hasData) {
-                  return const SizedBox(
-                    height: 200,
-                    child: Center(
-                      child: Text("Error fetching songs", style: TextStyle(color: Colors.white54)),
-                    ),
-                  );
-                }
-
-                final allSongs = List<Map<String, dynamic>>.from(snapshot.data!);
-                return Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            "Add Songs to Playlist",
-                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                          ),
-                          ElevatedButton(
-                            onPressed: selectedSongs.isEmpty
-                                ? null
-                                : () {
-                                    Navigator.of(ctx).pop(selectedSongs);
-                                  },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF8B5CF6),
-                              foregroundColor: Colors.white,
-                              disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
-                            ),
-                            child: const Text("Add"),
-                          ),
-                        ],
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(ctx).size.height * 0.85,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        "Add Songs to Playlist",
+                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                       ),
-                    ),
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: allSongs.length,
-                        itemBuilder: (context, idx) {
-                          final song = allSongs[idx];
-                          final songId = song['id'] as int;
-                          final isAlreadyIn = currentIds.contains(songId);
-                          final isSelected = selectedSongs.any((s) => s['id'] == songId);
-
-                          return ListTile(
-                            leading: SongCoverWidget(
-                              song: song,
-                              width: 40,
-                              height: 40,
-                              borderRadius: 4.0,
-                            ),
-                            title: Text(
-                              song['title'] ?? 'Unknown Track',
-                              style: TextStyle(
-                                color: isAlreadyIn ? Colors.white30 : Colors.white,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            subtitle: Text(
-                              song['artist'] ?? 'Unknown Artist',
-                              style: TextStyle(
-                                color: isAlreadyIn ? Colors.white24 : Colors.white38,
-                                fontSize: 12,
-                              ),
-                            ),
-                            trailing: isAlreadyIn
-                                ? const Icon(Icons.check_circle_rounded, color: Colors.white24)
-                                : Checkbox(
-                                    value: isSelected,
-                                    activeColor: const Color(0xFF8B5CF6),
-                                    onChanged: (val) {
-                                      setSheetState(() {
-                                        if (val == true) {
-                                          selectedSongs.add(song);
-                                        } else {
-                                          selectedSongs.removeWhere((s) => s['id'] == songId);
-                                        }
-                                      });
-                                    },
-                                  ),
-                          );
+                      ElevatedButton(
+                        onPressed: () {
+                          final selected = pickerKey.currentState?.selectedSongs ?? [];
+                          Navigator.of(ctx).pop(<String, dynamic>{
+                            'songs': selected,
+                          });
                         },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF8B5CF6),
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                        ),
+                        child: const Text("Add"),
                       ),
-                    ),
-                  ],
-                );
-              },
-            );
-          },
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: SongPickerWidget(
+                    key: pickerKey,
+                    disabledIds: currentIds,
+                  ),
+                ),
+              ],
+            ),
+          ),
         );
       },
     ).then((res) async {
-      if (res != null && res.isNotEmpty) {
+      if (res != null) {
+        final songs = List<Map<String, dynamic>>.from(res['songs'] as List);
+        if (songs.isEmpty) return;
         final storage = OfflineStorage();
-        await storage.addSongsToPlaylist(_playlist['id'] as int, res);
+        await storage.addSongsToPlaylist(_playlist['id'] as int, songs);
         
         if (_playlist['type'] == 'offline') {
-          for (final song in res) {
+          for (final song in songs) {
             await _downloadManager.downloadSong(_playlist['id'] as int, song);
           }
         }
