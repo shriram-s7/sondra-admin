@@ -32,12 +32,13 @@ class SongCoverWidget extends StatelessWidget {
       );
     }
 
-    final coverUrl = "${ApiService().baseUrl}/api/songs/${song["id"]}/cover";
+    final coverUrl = "${ApiService().baseUrl}/api/songs/${song["id"]}/cover?v=${song["id"]}";
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
       child: CachedNetworkImage(
         imageUrl: coverUrl,
+        cacheKey: "song_cover_${song["id"]}",
         width: width,
         height: height,
         fit: BoxFit.cover,
