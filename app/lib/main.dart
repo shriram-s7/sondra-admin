@@ -82,12 +82,14 @@ class SondraApp extends StatelessWidget {
                 final isKeyDown = event is KeyDownEvent;
                 if (isKeyDown) {
                   // Bypass hotkeys if a text input currently has active focus
-                  final hasInputFocus = FocusManager.instance.primaryFocus?.context?.widget is EditableText;
+                  final primaryFocus = FocusManager.instance.primaryFocus;
+                  final hasInputFocus = primaryFocus != null &&
+                      (primaryFocus.context?.widget is EditableText ||
+                       primaryFocus.context?.findAncestorWidgetOfExactType<EditableText>() != null);
                   if (hasInputFocus) return KeyEventResult.ignored;
 
                   final key = event.logicalKey;
                   if (key == LogicalKeyboardKey.space || 
-                      key == LogicalKeyboardKey.keyP ||
                       key == LogicalKeyboardKey.mediaPlayPause ||
                       key == LogicalKeyboardKey.mediaPlay ||
                       key == LogicalKeyboardKey.mediaPause) {

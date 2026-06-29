@@ -373,22 +373,9 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
             nextIdx = 0;
             await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
           } else {
-            // RULE 3 & 4 - WHAT HAPPENS WHEN PLAYLIST ENDS
-            final allLibrary = await _api.getSongs();
-            if (allLibrary.isEmpty) {
-              globalAudioHandler.pause();
-              seek(Duration.zero);
-              return;
-            }
-            
-            final rand = Random.secure();
-            final randomSong = Map<String, dynamic>.from(allLibrary[rand.nextInt(allLibrary.length)]);
-            
-            final contextResult = await _findPlaylistContextFor(randomSong);
-            final plName = contextResult['name'] as String;
-            final plSongs = contextResult['songs'] as List<Map<String, dynamic>>;
-            
-            await playSong(randomSong, plSongs, playlistName: plName, internalCall: true);
+            // End of playlist: stop playback and reset position
+            await globalAudioHandler.pause();
+            await seek(Duration.zero);
           }
         } else {
           await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
