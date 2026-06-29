@@ -2327,14 +2327,37 @@ class _PlaylistCard extends StatelessWidget {
 // Playlist detail screen – proper ConsumerWidget so the global
 // mini-player overlay works and the list has correct bottom padding.
 // ──────────────────────────────────────────────────────────────────
-class _PlaylistDetailScreen extends ConsumerWidget {
+class _PlaylistDetailScreen extends ConsumerStatefulWidget {
   final String name;
   final List<Map<String, dynamic>> songs;
 
   const _PlaylistDetailScreen({required this.name, required this.songs});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_PlaylistDetailScreen> createState() => _PlaylistDetailScreenState();
+}
+
+class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
+  String _searchQuery = "";
+  final _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _searchQuery.toLowerCase().trim();
+    final filteredSongs = query.isEmpty
+        ? widget.songs
+        : widget.songs.where((s) {
+            final title = (s["title"] ?? "").toString().toLowerCase();
+            final artist = (s["artist"] ?? "").toString().toLowerCase();
+            return title.contains(query) || artist.contains(query);
+          }).toList();
+
     final playerState = ref.watch(playerProvider);
     final bottomPad = playerState.currentSong != null ? (Platform.isWindows ? 90.0 : 76.0) : 0.0;
     final hasSong = playerState.currentSong != null;
@@ -2350,79 +2373,130 @@ class _PlaylistDetailScreen extends ConsumerWidget {
         child: Column(
           children: [
             Expanded(
-            child: ListView.builder(
-              padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
-              itemCount: songs.length + 1,
-              itemBuilder: (ctx, idx) {
-          if (idx == 0) {
-            return _PlaylistHeaderSection(name: name, songs: songs);
-          }
-          final s = songs[idx - 1];
-          final isCurrent = playerState.currentSong?["id"] == s["id"];
-          return GestureDetector(
-            onSecondaryTapDown: (details) {
-              if (Platform.isWindows) {
-                SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, s);
-              }
-            },
-            child: ListTile(
-              onTap: () => ref.read(playerProvider.notifier).playSong(s, songs, playlistName: name),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              leading: SongCoverWidget(
-                song: s,
-                width: 48,
-                height: 48,
-                borderRadius: 6.0,
-              ),
-              title: Text(
-                s["title"] ?? "Unknown Track",
-                style: TextStyle(
-                  color: isCurrent ? const Color(0xFF8B5CF6) : Colors.white,
-                  fontWeight: isCurrent ? FontWeight.bold : FontWeight.w500,
-                ),
-              ),
-              subtitle: Text(
-                s["artist"] ?? "Unknown Artist",
-                style: const TextStyle(color: Colors.white38, fontSize: 12),
-              ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (isCurrent && playerState.isPlaying)
-                    const Icon(Icons.equalizer_rounded, color: Color(0xFF8B5CF6), size: 20)
-                  else
-                    Text(
-                      "${(s["duration_seconds"] ?? 0) ~/ 60}:${((s["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
-                      style: const TextStyle(color: Colors.white30, fontSize: 11),
+              child: ListView.builder(
+                padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
+                itemCount: filteredSongs.length + 2,
+                itemBuilder: (ctx, idx) {
+                  if (idx == 0) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _PlaylistHeaderSection(name: widget.name, songs: widget.songs),
+                        if (widget.songs.isNotEmpty && filteredSongs.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 32.0),
+                            child: Center(
+                              child: Text('No tracks found matching your search',
+                                  style: TextStyle(color: Colors.white38)),
+                            ),
+                          ),
+                      ],
+                    );
+                  }
+                  if (idx == 1) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+                      child: TextField(
+                        controller: _searchController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: "Search in playlist...",
+                          hintStyle: const TextStyle(color: Colors.white24),
+                          prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38),
+                          suffixIcon: _searchQuery.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear_rounded, color: Colors.white38, size: 20),
+                                  onPressed: () {
+                                    setState(() {
+                                      _searchQuery = '';
+                                      _searchController.clear();
+                                    });
+                                  },
+                                )
+                              : null,
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.05),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
+                          ),
+                        ),
+                        onChanged: (val) {
+                          setState(() { _searchQuery = val; });
+                        },
+                      ),
+                    );
+                  }
+                  final s = filteredSongs[idx - 2];
+                  final isCurrent = playerState.currentSong?["id"] == s["id"];
+                  return GestureDetector(
+                    onSecondaryTapDown: (details) {
+                      if (Platform.isWindows) {
+                        SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, s);
+                      }
+                    },
+                    child: ListTile(
+                      onTap: () => ref.read(playerProvider.notifier).playSong(s, widget.songs, playlistName: widget.name),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      leading: SongCoverWidget(
+                        song: s,
+                        width: 48,
+                        height: 48,
+                        borderRadius: 6.0,
+                      ),
+                      title: Text(
+                        s["title"] ?? "Unknown Track",
+                        style: TextStyle(
+                          color: isCurrent ? const Color(0xFF8B5CF6) : Colors.white,
+                          fontWeight: isCurrent ? FontWeight.bold : FontWeight.w500,
+                        ),
+                      ),
+                      subtitle: Text(
+                        s["artist"] ?? "Unknown Artist",
+                        style: const TextStyle(color: Colors.white38, fontSize: 12),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isCurrent && playerState.isPlaying)
+                            const Icon(Icons.equalizer_rounded, color: Color(0xFF8B5CF6), size: 20)
+                          else
+                            Text(
+                              "${(s["duration_seconds"] ?? 0) ~/ 60}:${((s["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
+                              style: const TextStyle(color: Colors.white30, fontSize: 11),
+                            ),
+                          const SizedBox(width: 4),
+                          SongOptionsButton(song: s),
+                        ],
+                      ),
                     ),
-                  const SizedBox(width: 4),
-                  SongOptionsButton(song: s),
-                ],
+                  );
+                },
               ),
             ),
-          );
-        },
-      ),
-    ),
-    if (!Platform.isWindows && hasSong)
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-        child: MiniPlayer(
-          onTap: () {
-            ref.read(showNowPlayingProvider.notifier).state = true;
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => const NowPlayingScreen(),
+            if (!Platform.isWindows && hasSong)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+                child: MiniPlayer(
+                  onTap: () {
+                    ref.read(showNowPlayingProvider.notifier).state = true;
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const NowPlayingScreen(),
+                      ),
+                    ).then((_) {
+                      ref.read(showNowPlayingProvider.notifier).state = false;
+                    });
+                  },
+                ),
               ),
-            ).then((_) {
-              ref.read(showNowPlayingProvider.notifier).state = false;
-            });
-          },
+          ],
         ),
       ),
-    ],
-    ),
-    ),
     );
   }
 }
@@ -2430,7 +2504,7 @@ class _PlaylistDetailScreen extends ConsumerWidget {
 // ──────────────────────────────────────────────────────────────────
 // Inline Windows playlist details screen keeping BottomNavigationBar visible.
 // ──────────────────────────────────────────────────────────────────
-class _PlaylistDetailScreenInline extends ConsumerWidget {
+class _PlaylistDetailScreenInline extends ConsumerStatefulWidget {
   final String name;
   final List<Map<String, dynamic>> songs;
   final VoidCallback onBack;
@@ -2442,7 +2516,30 @@ class _PlaylistDetailScreenInline extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_PlaylistDetailScreenInline> createState() => _PlaylistDetailScreenInlineState();
+}
+
+class _PlaylistDetailScreenInlineState extends ConsumerState<_PlaylistDetailScreenInline> {
+  String _searchQuery = "";
+  final _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _searchQuery.toLowerCase().trim();
+    final filteredSongs = query.isEmpty
+        ? widget.songs
+        : widget.songs.where((s) {
+            final title = (s["title"] ?? "").toString().toLowerCase();
+            final artist = (s["artist"] ?? "").toString().toLowerCase();
+            return title.contains(query) || artist.contains(query);
+          }).toList();
+
     final playerState = ref.watch(playerProvider);
     final bottomPad = playerState.currentSong != null ? 90.0 : 0.0;
 
@@ -2453,18 +2550,69 @@ class _PlaylistDetailScreenInline extends ConsumerWidget {
         foregroundColor: Colors.white,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-          onPressed: onBack,
+          onPressed: widget.onBack,
         ),
         elevation: 0,
       ),
       body: ListView.builder(
         padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
-        itemCount: songs.length + 1,
+        itemCount: filteredSongs.length + 2,
         itemBuilder: (ctx, idx) {
           if (idx == 0) {
-            return _PlaylistHeaderSection(name: name, songs: songs);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _PlaylistHeaderSection(name: widget.name, songs: widget.songs),
+                if (widget.songs.isNotEmpty && filteredSongs.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 32.0),
+                    child: Center(
+                      child: Text('No tracks found matching your search',
+                          style: TextStyle(color: Colors.white38)),
+                    ),
+                  ),
+              ],
+            );
           }
-          final s = songs[idx - 1];
+          if (idx == 1) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+              child: TextField(
+                controller: _searchController,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: "Search in playlist...",
+                  hintStyle: const TextStyle(color: Colors.white24),
+                  prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear_rounded, color: Colors.white38, size: 20),
+                          onPressed: () {
+                            setState(() {
+                              _searchQuery = '';
+                              _searchController.clear();
+                            });
+                          },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.05),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
+                  ),
+                ),
+                onChanged: (val) {
+                  setState(() { _searchQuery = val; });
+                },
+              ),
+            );
+          }
+          final s = filteredSongs[idx - 2];
           final isCurrent = playerState.currentSong?["id"] == s["id"];
           return GestureDetector(
             onSecondaryTapDown: (details) {
@@ -2473,7 +2621,7 @@ class _PlaylistDetailScreenInline extends ConsumerWidget {
               }
             },
             child: ListTile(
-              onTap: () => ref.read(playerProvider.notifier).playSong(s, songs, playlistName: name),
+              onTap: () => ref.read(playerProvider.notifier).playSong(s, widget.songs, playlistName: widget.name),
               contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               leading: SongCoverWidget(
                 song: s,
@@ -3652,6 +3800,8 @@ class _OfflinePlaylistScreenState
   late Map<String, dynamic> _playlist;
   final DownloadManager _downloadManager = DownloadManager();
   StreamSubscription? _progressSub;
+  String _searchQuery = "";
+  final _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -3759,12 +3909,23 @@ class _OfflinePlaylistScreenState
   void dispose() {
     _progressSub?.cancel();
     _downloadManager.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
   @override
+  @override
   Widget build(BuildContext context) {
     final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
+    final query = _searchQuery.toLowerCase().trim();
+    final filteredSongs = query.isEmpty
+        ? songs
+        : songs.where((s) {
+            final title = (s["title"] ?? "").toString().toLowerCase();
+            final artist = (s["artist"] ?? "").toString().toLowerCase();
+            return title.contains(query) || artist.contains(query);
+          }).toList();
+
     final playerState = ref.watch(playerProvider);
     final hasPendingDownloads = songs.any((s) => s['status'] == 'downloading');
     final hasNotDownloaded = songs.any((s) => s['status'] == 'notDownloaded');
@@ -3816,9 +3977,9 @@ class _OfflinePlaylistScreenState
         child: Column(
           children: [
             Expanded(
-            child: ListView.builder(
+              child: ListView.builder(
         padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 16),
-        itemCount: songs.length + 1,
+        itemCount: filteredSongs.length + 2,
         itemBuilder: (ctx, idx) {
           if (idx == 0) {
             return Column(
@@ -3850,11 +4011,57 @@ class _OfflinePlaylistScreenState
                       child: Text('No songs in this playlist',
                           style: TextStyle(color: Colors.white38)),
                     ),
+                  )
+                else if (filteredSongs.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 32.0),
+                    child: Center(
+                      child: Text('No tracks found matching your search',
+                          style: TextStyle(color: Colors.white38)),
+                    ),
                   ),
               ],
             );
           }
-          final entry = songs[idx - 1];
+          if (idx == 1) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+              child: TextField(
+                controller: _searchController,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: "Search in playlist...",
+                  hintStyle: const TextStyle(color: Colors.white24),
+                  prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear_rounded, color: Colors.white38, size: 20),
+                          onPressed: () {
+                            setState(() {
+                              _searchQuery = '';
+                              _searchController.clear();
+                            });
+                          },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.05),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
+                  ),
+                ),
+                onChanged: (val) {
+                  setState(() { _searchQuery = val; });
+                },
+              ),
+            );
+          }
+          final entry = filteredSongs[idx - 2];
                 final status = entry['status'] as String? ?? 'notDownloaded';
                 final progress = (entry['progress'] as num?)?.toDouble() ?? 0.0;
                 final songId = entry['song_id'] as int;

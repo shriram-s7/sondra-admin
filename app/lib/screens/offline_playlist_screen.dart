@@ -33,6 +33,8 @@ class _OfflinePlaylistScreenState
   late Map<String, dynamic> _playlist;
   final DownloadManager _downloadManager = DownloadManager();
   StreamSubscription? _progressSub;
+  String _searchQuery = "";
+  final _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -140,12 +142,23 @@ class _OfflinePlaylistScreenState
   void dispose() {
     _progressSub?.cancel();
     _downloadManager.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
   @override
+  @override
   Widget build(BuildContext context) {
     final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
+    final query = _searchQuery.toLowerCase().trim();
+    final filteredSongs = query.isEmpty
+        ? songs
+        : songs.where((s) {
+            final title = (s["title"] ?? "").toString().toLowerCase();
+            final artist = (s["artist"] ?? "").toString().toLowerCase();
+            return title.contains(query) || artist.contains(query);
+          }).toList();
+
     final playerState = ref.watch(playerProvider);
     final hasPendingDownloads = songs.any((s) => s['status'] == 'downloading');
     final hasNotDownloaded = songs.any((s) => s['status'] == 'notDownloaded');
@@ -197,9 +210,9 @@ class _OfflinePlaylistScreenState
         child: Column(
           children: [
             Expanded(
-            child: ListView.builder(
+              child: ListView.builder(
         padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 16),
-        itemCount: songs.length + 1,
+        itemCount: filteredSongs.length + 2,
         itemBuilder: (ctx, idx) {
           if (idx == 0) {
             return Column(
@@ -231,11 +244,57 @@ class _OfflinePlaylistScreenState
                       child: Text('No songs in this playlist',
                           style: TextStyle(color: Colors.white38)),
                     ),
+                  )
+                else if (filteredSongs.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 32.0),
+                    child: Center(
+                      child: Text('No tracks found matching your search',
+                          style: TextStyle(color: Colors.white38)),
+                    ),
                   ),
               ],
             );
           }
-          final entry = songs[idx - 1];
+          if (idx == 1) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+              child: TextField(
+                controller: _searchController,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: "Search in playlist...",
+                  hintStyle: const TextStyle(color: Colors.white24),
+                  prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear_rounded, color: Colors.white38, size: 20),
+                          onPressed: () {
+                            setState(() {
+                              _searchQuery = '';
+                              _searchController.clear();
+                            });
+                          },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.05),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
+                  ),
+                ),
+                onChanged: (val) {
+                  setState(() { _searchQuery = val; });
+                },
+              ),
+            );
+          }
+          final entry = filteredSongs[idx - 2];
                 final status = entry['status'] as String? ?? 'notDownloaded';
                 final progress = (entry['progress'] as num?)?.toDouble() ?? 0.0;
                 final songId = entry['song_id'] as int;
