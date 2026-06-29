@@ -92,6 +92,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     });
 
     _stateSub = globalAudioHandler.player.playerStateStream.listen((pState) {
+      if (_isBusy) return;
       state = state.copyWith(
         isPlaying: pState.playing,
         isBuffering: pState.processingState == ProcessingState.buffering ||
@@ -205,6 +206,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         state = state.copyWith(
           currentSong: song,
           isBuffering: false,
+          isPlaying: true,
         );
 
         if (startSeconds != null) {
@@ -334,7 +336,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   Future<void> handleNext() async {
     final now = DateTime.now();
     if (_lastActionTime != null && 
-        now.difference(_lastActionTime!) < const Duration(milliseconds: 500)) {
+        now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
       return;
     }
     _lastActionTime = now;
@@ -400,7 +402,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   Future<void> handlePrev() async {
     final now = DateTime.now();
     if (_lastActionTime != null && 
-        now.difference(_lastActionTime!) < const Duration(milliseconds: 500)) {
+        now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
       return;
     }
     _lastActionTime = now;
@@ -488,3 +490,4 @@ final playerProvider = StateNotifierProvider<PlayerNotifier, PlayerState>((ref) 
 });
 
 final showNowPlayingProvider = StateProvider<bool>((ref) => false);
+final showBottomNavBarProvider = StateProvider<bool>((ref) => false);

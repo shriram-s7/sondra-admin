@@ -1191,9 +1191,10 @@ class _PlaylistDetailScreen extends ConsumerWidget {
         foregroundColor: Colors.white,
         elevation: 0,
       ),
-      body: Column(
-        children: [
-          Expanded(
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
             child: ListView.builder(
               padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
               itemCount: songs.length + 1,
@@ -1265,6 +1266,7 @@ class _PlaylistDetailScreen extends ConsumerWidget {
         ),
       ),
     ],
+    ),
     ),
     );
   }

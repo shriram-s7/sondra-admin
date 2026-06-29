@@ -148,9 +148,10 @@ class _OfflinePlaylistScreenState
         ],
         elevation: 0,
       ),
-      body: Column(
-        children: [
-          Expanded(
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
             child: ListView.builder(
         padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 16),
         itemCount: songs.length + 1,
@@ -371,6 +372,7 @@ class _OfflinePlaylistScreenState
             ),
         ],
       ),
+    ),
     );
   }
 

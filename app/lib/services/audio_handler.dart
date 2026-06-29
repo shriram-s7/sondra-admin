@@ -162,7 +162,7 @@ class SondraAudioHandler extends BaseAudioHandler {
           }
         }
       }
-      await _player.play();
+      _player.play();
     } finally {
       _isLoading = false;
     }

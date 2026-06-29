@@ -315,6 +315,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     });
 
     _stateSub = globalAudioHandler.player.playerStateStream.listen((pState) {
+      if (_isBusy) return;
       state = state.copyWith(
         isPlaying: pState.playing,
         isBuffering: pState.processingState == ProcessingState.buffering ||
@@ -428,6 +429,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         state = state.copyWith(
           currentSong: song,
           isBuffering: false,
+          isPlaying: true,
         );
 
         if (startSeconds != null) {
@@ -557,7 +559,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   Future<void> handleNext() async {
     final now = DateTime.now();
     if (_lastActionTime != null && 
-        now.difference(_lastActionTime!) < const Duration(milliseconds: 500)) {
+        now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
       return;
     }
     _lastActionTime = now;
@@ -623,7 +625,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   Future<void> handlePrev() async {
     final now = DateTime.now();
     if (_lastActionTime != null && 
-        now.difference(_lastActionTime!) < const Duration(milliseconds: 500)) {
+        now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
       return;
     }
     _lastActionTime = now;
@@ -711,6 +713,7 @@ final playerProvider = StateNotifierProvider<PlayerNotifier, PlayerState>((ref) 
 });
 
 final showNowPlayingProvider = StateProvider<bool>((ref) => false);
+final showBottomNavBarProvider = StateProvider<bool>((ref) => false);
 ```
 
 ### 3. `app/lib/screens/setup_screen.dart`
@@ -2126,9 +2129,10 @@ class _PlaylistDetailScreen extends ConsumerWidget {
         foregroundColor: Colors.white,
         elevation: 0,
       ),
-      body: Column(
-        children: [
-          Expanded(
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
             child: ListView.builder(
               padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
               itemCount: songs.length + 1,
@@ -2200,6 +2204,7 @@ class _PlaylistDetailScreen extends ConsumerWidget {
         ),
       ),
     ],
+    ),
     ),
     );
   }
@@ -3527,9 +3532,10 @@ class _OfflinePlaylistScreenState
         ],
         elevation: 0,
       ),
-      body: Column(
-        children: [
-          Expanded(
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
             child: ListView.builder(
         padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 16),
         itemCount: songs.length + 1,
@@ -3750,6 +3756,7 @@ class _OfflinePlaylistScreenState
             ),
         ],
       ),
+    ),
     );
   }
 
@@ -4537,7 +4544,7 @@ class SondraAudioHandler extends BaseAudioHandler {
           }
         }
       }
-      await _player.play();
+      _player.play();
     } finally {
       _isLoading = false;
     }
