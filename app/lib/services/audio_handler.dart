@@ -45,7 +45,15 @@ class SondraAudioHandler extends BaseAudioHandler {
   void _initWindowsSmtc() {
     _smtc = SMTCWindows();
     
-    // Listen to button press streams
+    // Explicitly enable next and previous buttons on the SMTC.
+    // The default SMTCConfig has nextEnabled/prevEnabled=true, but
+    // the system needs an explicit update to register them as active.
+    _smtc!.setIsNextEnabled(true);
+    _smtc!.setIsPrevEnabled(true);
+    _smtc!.setIsPlayEnabled(true);
+    _smtc!.setIsPauseEnabled(true);
+
+    // Listen to button press streams from the system
     _smtc!.buttonPressStream.listen((event) async {
       switch (event) {
         case PressedButton.play:

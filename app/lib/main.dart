@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,6 +19,17 @@ Future<void> main() async {
   // Initialize offline storage for offline playlists
   await OfflineStorage().init();
 
+  // Pre-create the Android notification channel with HIGH importance so the
+  // media notification appears on the lock screen. This must run BEFORE
+  // AudioService.init() because audio_service creates the channel only if it
+  // doesn't exist, and defaults to IMPORTANCE_LOW which hides it on lockscreen.
+  if (!kIsWeb && Platform.isAndroid) {
+    try {
+      await const MethodChannel('com.sondra.music/notification')
+          .invokeMethod('ensureChannel');
+    } catch (_) {}
+  }
+
   // AudioService.init may fail silently on Windows/desktop; fall back to
   // direct handler so just_audio still works natively.
   try {
@@ -25,6 +38,7 @@ Future<void> main() async {
       config: const AudioServiceConfig(
         androidNotificationChannelId: 'com.sondra.music.channel.audio',
         androidNotificationChannelName: 'Sondra Music Playback',
+        androidNotificationChannelDescription: 'Music playback controls',
         androidNotificationOngoing: true,
         androidShowNotificationBadge: true,
       ),
