@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,6 +11,12 @@ class ApiService {
   String? token;
   StreamController<Map<String, dynamic>> sseController = StreamController.broadcast();
   StreamSubscription? sseSubscription;
+
+  // Android auto-login credentials (personal app — change these if your admin password changes)
+  static const String _androidUsername = "admin";
+  static const String _androidPassword = "admin";
+
+  bool get _isAndroid => !kIsWeb && !Platform.isWindows;
 
   static final ApiService _instance = ApiService._internal();
   factory ApiService() => _instance;
@@ -22,8 +30,24 @@ class ApiService {
       },
       onError: (DioException e, handler) async {
         if (e.response?.statusCode == 401) {
-          // Token expired or invalid
-          await logout();
+          if (_isAndroid) {
+            // Android: transparently re-login and retry
+            final success = await _autoLogin();
+            if (success) {
+              e.requestOptions.headers["Authorization"] = "Bearer $token";
+              try {
+                final retryResponse = await dio.fetch(e.requestOptions);
+                handler.resolve(retryResponse);
+                return;
+              } catch (_) {}
+            }
+          } else {
+            // Windows: clear stored token on 401
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.remove("sondra_token");
+            token = null;
+            sseSubscription?.cancel();
+          }
         }
         return handler.next(e);
       },
@@ -31,34 +55,58 @@ class ApiService {
   }
 
   Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
-    baseUrl = "https://sondra-backend.onrender.com";
-    token = prefs.getString("sondra_token");
+    baseUrl = "https://sondra-backend-cxkc.onrender.com";
     dio.options.baseUrl = baseUrl!;
-    if (token != null) {
-      startSseConnection();
+
+    if (_isAndroid) {
+      // Android: auto-login silently — no user interaction, no SharedPreferences
+      await _autoLogin();
+    } else {
+      // Windows: use stored token from previous session
+      final prefs = await SharedPreferences.getInstance();
+      token = prefs.getString("sondra_token");
+      if (token != null) {
+        startSseConnection();
+      }
     }
   }
 
+  /// Android transparent login — called silently on startup and on 401.
+  Future<bool> _autoLogin() async {
+    try {
+      final response = await dio.post(
+        "$baseUrl/auth/login",
+        data: {"username": _androidUsername, "password": _androidPassword},
+      );
+      token = response.data["access_token"];
+      startSseConnection();
+      return true;
+    } catch (e) {
+      print("Android auto-login failed: $e");
+      token = null;
+      return false;
+    }
+  }
+
+  /// Windows-only login with SharedPreferences storage.
+  /// On Android this delegates to _autoLogin (no persistence).
   Future<bool> login(String username, String password) async {
-    String cleanUrl = "https://sondra-backend.onrender.com";
-    
+    if (_isAndroid) {
+      return _autoLogin();
+    }
+    String cleanUrl = "https://sondra-backend-cxkc.onrender.com";
     try {
       final response = await dio.post(
         "$cleanUrl/auth/login",
         data: {"username": username, "password": password},
       );
-      
       final String jwtToken = response.data["access_token"];
-      
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString("sondra_server_url", cleanUrl);
       await prefs.setString("sondra_token", jwtToken);
-      
       baseUrl = cleanUrl;
       token = jwtToken;
       dio.options.baseUrl = cleanUrl;
-      
       startSseConnection();
       return true;
     } catch (e) {
@@ -68,6 +116,12 @@ class ApiService {
   }
 
   Future<void> logout() async {
+    if (_isAndroid) {
+      // Android: just clear in-memory — no persisted state
+      token = null;
+      sseSubscription?.cancel();
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove("sondra_token");
     token = null;

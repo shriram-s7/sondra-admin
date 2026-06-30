@@ -86,6 +86,13 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   Timer? _bufferingTimer;
   Timer? _bufferingSevereTimer;
 
+  // Cache for playlist context lookups so the queue path in handleNext()
+  // doesn't block on 1-3 sequential network calls per transition.
+  List<Map<String, dynamic>>? _cachedPlaylists;
+  List<Map<String, dynamic>>? _cachedLibrarySongs;
+  DateTime? _cacheValidUntil;
+  static const _cacheTtl = Duration(seconds: 30);
+
   PlayerNotifier() : super(PlayerState()) {
     _posSub = globalAudioHandler.player.positionStream.listen((pos) {
       state = state.copyWith(position: pos);
@@ -161,10 +168,8 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     if (_isBusy && !internalCall) return;
     _isBusy = true;
     try {
-      // 1. Immediately stop current playback to release native resources instantly
-      await globalAudioHandler.player.stop();
-      await globalAudioHandler.player.seek(Duration.zero);
-
+      // 1. setAudioSource() handles internal source replacement - no stop/seek needed.
+      //    Removing redundant stop+seek saves ~50-150ms per transition.
       // 2. Identify if it is a new queue or transition within the same queue
       bool isNewQueue = false;
       if (state.originalPlaylist.length != playlist.length) {
@@ -215,11 +220,22 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         title: song["title"] ?? "Unknown Title",
         artist: song["artist"] ?? "Unknown Artist",
         duration: Duration(seconds: song["duration_seconds"] ?? 0),
-        artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover"),
+        artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover?v=${song["id"]}"),
       );
+
+      // Start warming the connection for the song after [song] NOW, before
+      // playUri() even begins, so by the time the next transition fires the
+      // backend proxy/Google-Drive fetch is already warmed. The early call is
+      // sufficient; the Range request is idempotent so a second call is waste.
+      _warmNextSong(currentSong: song);
 
       try {
         await globalAudioHandler.playUri(directUrl, mediaItem);
+
+        // Ensure the player is actually playing (fixes Bluetooth earbud paused-after-skip bug)
+        if (!globalAudioHandler.player.playing) {
+          await globalAudioHandler.player.play();
+        }
 
         // CHANGE 6: Only now that playUri() has succeeded do we update the banner song.
         state = state.copyWith(
@@ -231,9 +247,6 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         if (startSeconds != null) {
           await globalAudioHandler.seek(Duration(seconds: startSeconds));
         }
-
-        // Warm up connection for next song (Improvement 3)
-        _preloadNextSong();
       } catch (e) {
         print("Error loading song in provider: $e");
         // Retry up to 3 times with 1.5s delay before skipping (Improvement 1)
@@ -262,7 +275,6 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
           if (startSeconds != null) {
             await globalAudioHandler.seek(Duration(seconds: startSeconds));
           }
-          _preloadNextSong();
         } else {
           handleNext();
         }
@@ -300,7 +312,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   }
 
   Future<Map<String, dynamic>> _findPlaylistContextFor(Map<String, dynamic> song) async {
-    // 1. Look up in local personal/offline playlists first
+    // 1. Look up in local personal/offline playlists first (always fast, no cache needed)
     final allLocalPlaylists = OfflineStorage().getPlaylists();
     for (final pl in allLocalPlaylists) {
       final songs = List<Map<String, dynamic>>.from(pl["songs"] ?? []);
@@ -320,15 +332,24 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       }
     }
 
-    // 2. Fetch remote playlists from ApiService
+    // 2. Use cached remote data if fresh, to avoid blocking network calls on every transition
+    final now = DateTime.now();
+    if (_cacheValidUntil != null && now.isBefore(_cacheValidUntil!)) {
+      final lookupResult = _lookupInCache(song);
+      if (lookupResult != null) return lookupResult;
+    }
+
+    // 3. Fetch remote playlists from ApiService (cache miss or expired)
     try {
       final remotePlaylists = await _api.getPlaylists();
+      _cachedPlaylists = remotePlaylists.cast<Map<String, dynamic>>();
       for (final pl in remotePlaylists) {
         final songs = List<dynamic>.from(pl["songs"] ?? []);
         final exists = songs.any((s) => s["id"] == song["id"]);
         if (exists) {
           final name = pl["name"] ?? "Remote Playlist";
           final list = songs.map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s)).toList();
+          _cacheValidUntil = now.add(_cacheTtl);
           return {'name': name, 'songs': list};
         }
       }
@@ -336,9 +357,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       print("Error fetching remote playlists in _findPlaylistContextFor: $e");
     }
 
-    // 3. Fallback to all library songs
+    // 4. Fallback to all library songs
     try {
       final allLibrary = await _api.getSongs();
+      _cachedLibrarySongs = allLibrary.cast<Map<String, dynamic>>();
+      _cacheValidUntil = now.add(_cacheTtl);
       final list = allLibrary.map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s)).toList();
       return {'name': "Music Library", 'songs': list};
     } catch (e) {
@@ -346,6 +369,32 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     }
 
     return {'name': "Music Library", 'songs': [song]};
+  }
+
+  /// Tries to find [song] in the cached playlists or library, returning the
+  /// context immediately without any network I/O. Returns null on cache miss.
+  Map<String, dynamic>? _lookupInCache(Map<String, dynamic> song) {
+    // Search cached remote playlists
+    if (_cachedPlaylists != null) {
+      for (final pl in _cachedPlaylists!) {
+        final songs = List<dynamic>.from(pl["songs"] ?? []);
+        if (songs.any((s) => s["id"] == song["id"])) {
+          final name = pl["name"] ?? "Remote Playlist";
+          final list = songs.map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s)).toList();
+          return {'name': name, 'songs': list};
+        }
+      }
+    }
+    // Search cached library
+    if (_cachedLibrarySongs != null) {
+      if (_cachedLibrarySongs!.any((s) => s["id"] == song["id"])) {
+        final list = _cachedLibrarySongs!
+            .map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s))
+            .toList();
+        return {'name': "Music Library", 'songs': list};
+      }
+    }
+    return null;
   }
 
   void toggleShuffle() {
@@ -530,12 +579,21 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     );
   }
 
-  Future<void> _preloadNextSong() async {
+  /// Warms up the streaming connection for the song that comes after [currentSong]
+  /// in the active playlist. This is called early during playSong() so the CDN/
+  /// proxy connection is already warmed by the time the next transition occurs.
+  void _warmNextSong({Map<String, dynamic>? currentSong}) {
+    final song = currentSong ?? state.currentSong;
+    if (song == null) return;
+    unawaited(_warmNextSongAsync(song));
+  }
+
+  Future<void> _warmNextSongAsync(Map<String, dynamic> song) async {
     Map<String, dynamic>? nextSong;
     if (state.queue.isNotEmpty) {
       nextSong = state.queue.first;
-    } else if (state.activePlaylist.isNotEmpty && state.currentSong != null) {
-      final idx = state.activePlaylist.indexWhere((s) => s["id"] == state.currentSong!["id"]);
+    } else if (state.activePlaylist.isNotEmpty) {
+      final idx = state.activePlaylist.indexWhere((s) => s["id"] == song["id"]);
       if (idx != -1 && idx + 1 < state.activePlaylist.length) {
         nextSong = state.activePlaylist[idx + 1];
       } else if (state.repeat == "all" && state.activePlaylist.isNotEmpty) {

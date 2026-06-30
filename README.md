@@ -90,7 +90,7 @@ You can deploy the React admin dashboard to Vercel separately for fast static lo
    - **Build Command:** `npm run build`
    - **Output Directory:** `dist`
 3. Set the following environment variable:
-   - `VITE_API_URL`: The URL of your Render backend API (e.g., `https://sondra-backend.onrender.com`).
+   - `VITE_API_URL`: The URL of your Render backend API (e.g., `https://sondra-backend-cxkc.onrender.com`).
 4. Vercel will build and serve your app. Vercel routes are pre-configured to fallback to SPA indexing using the [vercel.json](file:///e:/PROJECT%20SONDRA/sondra/admin/vercel.json) settings.
 
 ---
@@ -123,7 +123,7 @@ cd sondra/app
 2. The compiled APK is saved at:
    `app/build/app/outputs/flutter-apk/app-release.apk`
 3. Transfer `app-release.apk` to your phone and install it.
-4. Open the app, type in your server URL (e.g., `https://sondra-backend.onrender.com`), log in with your admin credentials, and listen to music!
+4. Open the app, type in your server URL (e.g., `https://sondra-backend-cxkc.onrender.com`), log in with your admin credentials, and listen to music!
 
 ### 2. Build Windows Executable & Installer
 1. Run the Windows release compile command:

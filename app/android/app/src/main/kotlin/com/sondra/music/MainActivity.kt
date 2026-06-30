@@ -48,11 +48,16 @@ class MainActivity : AudioServiceActivity() {
             val channelId = "com.sondra.music.channel.audio"
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             
-            // Create or update the channel with HIGH importance for lock screen visibility
+            // Use IMPORTANCE_LOW to prevent notification update sounds during song transitions.
+            // Playback controls and lock screen visibility still work via AudioService's
+            // NotificationCompat.Builder#setVisibility(VISIBILITY_PUBLIC) and the ongoing
+            // foreground-service notification. HIGH importance is not needed and causes a
+            // "pop" sound through the notification stream every time the notification is
+            // updated with new track metadata.
             val channel = NotificationChannel(
                 channelId,
                 "Sondra Music Playback",
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Music playback controls"
                 setShowBadge(true)

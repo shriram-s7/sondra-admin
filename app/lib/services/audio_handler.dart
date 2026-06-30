@@ -11,15 +11,13 @@ class SondraAudioHandler extends BaseAudioHandler {
       androidLoadControl: AndroidLoadControl(
         minBufferDuration: Duration(seconds: 15),
         maxBufferDuration: Duration(seconds: 50),
-        bufferForPlaybackDuration: Duration(milliseconds: 2500),
+        bufferForPlaybackDuration: Duration(milliseconds: 1000),
         bufferForPlaybackAfterRebufferDuration: Duration(seconds: 5),
       ),
     ),
   );
   SMTCWindows? _smtc;
   Future<void>? _initFuture;
-  bool _isLoading = false;
-
   // Callbacks hooked by the Riverpod notifier
   Future<void> Function()? onSkipToNext;
   Future<void> Function()? onSkipToPrevious;
@@ -45,7 +43,14 @@ class SondraAudioHandler extends BaseAudioHandler {
   Future<void> _initAudioSession() async {
     try {
       final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration.music());
+      await session.configure(const AudioSessionConfiguration(
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.music,
+          usage: AndroidAudioUsage.media,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+        androidWillPauseWhenDucked: true,
+      ));
     } catch (e) {
       print("AudioSession configuration failed: $e");
     }
@@ -102,14 +107,10 @@ class SondraAudioHandler extends BaseAudioHandler {
   }
 
   Future<void> playUri(String uri, MediaItem item) async {
-    if (_isLoading) {
-      try {
-        await _player.stop();
-      } catch (_) {}
-    }
-    _isLoading = true;
-    try {
-      await ensureInitialized();
+    // No stop() needed — setAudioSource handles internal source replacement.
+    // Note: _isLoading was removed because it is unused when there is no stop gate.
+    await ensureInitialized();
+
     mediaItem.add(item);
 
     // Update SMTC Metadata on Windows
@@ -122,39 +123,27 @@ class SondraAudioHandler extends BaseAudioHandler {
     }
 
     try {
-      // Check if this is a local file path (starts with / on Android or a drive letter on Windows)
       final isLocalFilePath = uri.startsWith('/') || 
-          (uri.length > 2 && uri[1] == ':'); // Windows drive path like C:\...
+          (uri.length > 2 && uri[1] == ':');
       
       if (!kIsWeb && Platform.isAndroid) {
-        // Android-specific: prevent cache collision and metadata mismatch
         if (isLocalFilePath) {
           await _player.setAudioSource(
-            AudioSource.file(
-              uri,
-              tag: item,
-            ),
+            AudioSource.file(uri, tag: item),
           );
         } else {
           final parsedUri = Uri.parse(uri);
           if (parsedUri.scheme == 'file') {
             await _player.setAudioSource(
-              AudioSource.file(
-                parsedUri.toFilePath(),
-                tag: item,
-              ),
+              AudioSource.file(parsedUri.toFilePath(), tag: item),
             );
           } else {
             await _player.setAudioSource(
-              AudioSource.uri(
-                parsedUri,
-                tag: item,
-              ),
+              AudioSource.uri(parsedUri, tag: item),
             );
           }
         }
       } else {
-        // Other platforms (Windows, etc.): do not modify existing behavior
         if (isLocalFilePath) {
           await _player.setAudioSource(AudioSource.file(uri));
         } else {
@@ -163,18 +152,12 @@ class SondraAudioHandler extends BaseAudioHandler {
             await _player.setAudioSource(AudioSource.file(parsedUri.toFilePath()));
           } else {
             await _player.setAudioSource(
-              AudioSource.uri(
-                parsedUri,
-                tag: item,
-              ),
+              AudioSource.uri(parsedUri, tag: item),
             );
           }
         }
       }
-      _player.play();
-    } finally {
-      _isLoading = false;
-    }
+      await _player.play();
     } catch (e) {
       print("Audio player setSource error: $e");
       playbackState.add(playbackState.value.copyWith(

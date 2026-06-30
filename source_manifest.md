@@ -4475,7 +4475,7 @@ class ApiService {
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
-    baseUrl = "https://sondra-backend.onrender.com";
+    baseUrl = "https://sondra-backend-cxkc.onrender.com";
     token = prefs.getString("sondra_token");
     dio.options.baseUrl = baseUrl!;
     if (token != null) {
@@ -4484,7 +4484,7 @@ class ApiService {
   }
 
   Future<bool> login(String username, String password) async {
-    String cleanUrl = "https://sondra-backend.onrender.com";
+    String cleanUrl = "https://sondra-backend-cxkc.onrender.com";
     
     try {
       final response = await dio.post(
@@ -8080,7 +8080,7 @@ def record_listen(
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "https://sondra-backend.onrender.com",
+  baseURL: import.meta.env.VITE_API_URL || "https://sondra-backend-cxkc.onrender.com",
 });
 
 // Request Interceptor: Attach JWT bearer token if available

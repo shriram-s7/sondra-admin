@@ -4,12 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_service/audio_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'services/audio_handler.dart';
 import 'services/offline_storage.dart';
 import 'services/api_service.dart';
 import 'providers/player_provider.dart';
-import 'screens/setup_screen.dart';
 import 'screens/home_screen.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -141,138 +139,11 @@ class SondraApp extends StatelessWidget {
   }
 }
 
-class AppEntryPoint extends StatefulWidget {
+class AppEntryPoint extends StatelessWidget {
   const AppEntryPoint({super.key});
 
   @override
-  State<AppEntryPoint> createState() => _AppEntryPointState();
-}
-
-class _AppEntryPointState extends State<AppEntryPoint> with WidgetsBindingObserver {
-  bool _isChecking = true;
-  bool _showPasscode = false;
-  bool _isSetupFirstTime = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _checkPasscode();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  Future<void> _checkPasscode() async {
-    if (Platform.isWindows) {
-      if (mounted) {
-        setState(() {
-          _isChecking = false;
-          _showPasscode = false;
-        });
-      }
-      return;
-    }
-    final prefs = await SharedPreferences.getInstance();
-    final passcodeSet = prefs.getBool('passcode_set') ?? false;
-
-    if (!passcodeSet) {
-      if (mounted) {
-        setState(() {
-          _isChecking = false;
-          _showPasscode = true;
-          _isSetupFirstTime = true;
-        });
-      }
-      return;
-    }
-
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final lastActive = prefs.getInt('last_active_time') ?? now;
-    final elapsed = now - lastActive;
-    const oneHour = 60 * 60 * 1000;
-
-    final isPlaying = globalAudioHandler.player.playing;
-
-    if (elapsed > oneHour && !isPlaying) {
-      if (mounted) {
-        setState(() {
-          _isChecking = false;
-          _showPasscode = true;
-          _isSetupFirstTime = false;
-        });
-      }
-    } else {
-      if (mounted) {
-        setState(() {
-          _isChecking = false;
-          _showPasscode = false;
-        });
-      }
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (Platform.isWindows) return;
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      if (!globalAudioHandler.player.playing) {
-        SharedPreferences.getInstance().then((prefs) {
-          prefs.setInt('last_active_time', DateTime.now().millisecondsSinceEpoch);
-        });
-      }
-    }
-    if (state == AppLifecycleState.resumed) {
-      SharedPreferences.getInstance().then((prefs) async {
-        final passcodeSet = prefs.getBool('passcode_set') ?? false;
-        if (!passcodeSet) return;
-
-        final now = DateTime.now().millisecondsSinceEpoch;
-        final lastActive = prefs.getInt('last_active_time') ?? now;
-        final elapsed = now - lastActive;
-        const oneHour = 60 * 60 * 1000;
-
-        final isPlaying = globalAudioHandler.player.playing;
-
-        if (elapsed > oneHour && !isPlaying) {
-          if (mounted) {
-            setState(() {
-              _showPasscode = true;
-              _isSetupFirstTime = false;
-            });
-          }
-        }
-      });
-    }
-  }
-
-  void _handleUnlock() {
-    setState(() {
-      _showPasscode = false;
-      _isSetupFirstTime = false;
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (_isChecking) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF08070D),
-        body: Center(child: CircularProgressIndicator(color: Color(0xFF8B5CF6))),
-      );
-    }
-
-    if (_showPasscode) {
-      return SetupScreen(
-        key: ValueKey(_isSetupFirstTime ? 'setup' : 'entry'),
-        isSetup: _isSetupFirstTime,
-        onUnlock: _handleUnlock,
-      );
-    }
-
     return const HomeScreen();
   }
 }
