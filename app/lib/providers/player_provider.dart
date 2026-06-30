@@ -82,6 +82,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   StreamSubscription? _durSub;
   StreamSubscription? _stateSub;
   bool _isBusy = false;
+  bool _pendingPlaybackStart = false;
   DateTime? _lastActionTime;
   Timer? _bufferingTimer;
   Timer? _bufferingSevereTimer;
@@ -106,6 +107,16 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
 
     _stateSub = globalAudioHandler.player.playerStateStream.listen((pState) {
       if (_isBusy) return;
+
+      // When a song just started playing, ignore the first stale "playing: false"
+      // event that was queued during the transition. Without this the state stream
+      // overwrites the optimistic isPlaying:true set in playSong(), causing a
+      // visible "paused" flash on Bluetooth earbud skips.
+      if (_pendingPlaybackStart) {
+        _pendingPlaybackStart = false;
+        if (!pState.playing && state.isPlaying) return;
+      }
+
       final wasBuffering = state.isBuffering;
       final nowBuffering = pState.processingState == ProcessingState.buffering ||
                            pState.processingState == ProcessingState.loading;
@@ -238,6 +249,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         }
 
         // CHANGE 6: Only now that playUri() has succeeded do we update the banner song.
+        _pendingPlaybackStart = true;
         state = state.copyWith(
           currentSong: song,
           isBuffering: false,
@@ -266,6 +278,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
           }
         }
         if (retrySuccess) {
+          _pendingPlaybackStart = true;
           state = state.copyWith(
             currentSong: song,
             isBuffering: false,
@@ -440,7 +453,14 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     }
     _lastActionTime = now;
 
-    if (_isBusy) return;
+    if (_isBusy) {
+      // Don't drop the command — wait briefly for the current transition to finish
+      for (int i = 0; i < 20; i++) {
+        await Future.delayed(const Duration(milliseconds: 50));
+        if (!_isBusy) break;
+      }
+      if (_isBusy) return;
+    }
     _isBusy = true;
 
     try {
@@ -500,7 +520,13 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     }
     _lastActionTime = now;
 
-    if (_isBusy) return;
+    if (_isBusy) {
+      for (int i = 0; i < 20; i++) {
+        await Future.delayed(const Duration(milliseconds: 50));
+        if (!_isBusy) break;
+      }
+      if (_isBusy) return;
+    }
     _isBusy = true;
 
     try {
@@ -509,6 +535,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       // Restart song if it has played past 3 seconds
       if (state.position.inSeconds > 3) {
         seek(Duration.zero);
+        globalAudioHandler.play();
         return;
       }
 

@@ -1,9 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:dio/dio.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   final Dio dio = Dio();
@@ -12,11 +9,10 @@ class ApiService {
   StreamController<Map<String, dynamic>> sseController = StreamController.broadcast();
   StreamSubscription? sseSubscription;
 
-  // Android auto-login credentials (personal app — change these if your admin password changes)
-  static const String _androidUsername = "admin";
-  static const String _androidPassword = "admin";
-
-  bool get _isAndroid => !kIsWeb && !Platform.isWindows;
+  // Hardcoded admin credentials for auto-login (Android + Windows).
+  // Change these if your backend admin password changes, then rebuild.
+  static const String _adminUsername = "admin";
+  static const String _adminPassword = "admin";
 
   static final ApiService _instance = ApiService._internal();
   factory ApiService() => _instance;
@@ -30,23 +26,15 @@ class ApiService {
       },
       onError: (DioException e, handler) async {
         if (e.response?.statusCode == 401) {
-          if (_isAndroid) {
-            // Android: transparently re-login and retry
-            final success = await _autoLogin();
-            if (success) {
-              e.requestOptions.headers["Authorization"] = "Bearer $token";
-              try {
-                final retryResponse = await dio.fetch(e.requestOptions);
-                handler.resolve(retryResponse);
-                return;
-              } catch (_) {}
-            }
-          } else {
-            // Windows: clear stored token on 401
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.remove("sondra_token");
-            token = null;
-            sseSubscription?.cancel();
+          // Transparently re-login and retry (Android + Windows)
+          final success = await _autoLogin();
+          if (success) {
+            e.requestOptions.headers["Authorization"] = "Bearer $token";
+            try {
+              final retryResponse = await dio.fetch(e.requestOptions);
+              handler.resolve(retryResponse);
+              return;
+            } catch (_) {}
           }
         }
         return handler.next(e);
@@ -58,72 +46,34 @@ class ApiService {
     baseUrl = "https://sondra-backend-cxkc.onrender.com";
     dio.options.baseUrl = baseUrl!;
 
-    if (_isAndroid) {
-      // Android: auto-login silently — no user interaction, no SharedPreferences
-      await _autoLogin();
-    } else {
-      // Windows: use stored token from previous session
-      final prefs = await SharedPreferences.getInstance();
-      token = prefs.getString("sondra_token");
-      if (token != null) {
-        startSseConnection();
-      }
-    }
+    // Both Android and Windows: auto-login silently with hardcoded credentials
+    // No SharedPreferences token storage, no user-facing auth
+    await _autoLogin();
   }
 
-  /// Android transparent login — called silently on startup and on 401.
+  /// Silently authenticates on startup and on 401 — both platforms.
   Future<bool> _autoLogin() async {
     try {
       final response = await dio.post(
         "$baseUrl/auth/login",
-        data: {"username": _androidUsername, "password": _androidPassword},
+        data: {"username": _adminUsername, "password": _adminPassword},
       );
       token = response.data["access_token"];
       startSseConnection();
       return true;
     } catch (e) {
-      print("Android auto-login failed: $e");
+      print("Auto-login failed: $e");
       token = null;
       return false;
     }
   }
 
-  /// Windows-only login with SharedPreferences storage.
-  /// On Android this delegates to _autoLogin (no persistence).
+  /// Kept for API compatibility — both platforms use _autoLogin().
   Future<bool> login(String username, String password) async {
-    if (_isAndroid) {
-      return _autoLogin();
-    }
-    String cleanUrl = "https://sondra-backend-cxkc.onrender.com";
-    try {
-      final response = await dio.post(
-        "$cleanUrl/auth/login",
-        data: {"username": username, "password": password},
-      );
-      final String jwtToken = response.data["access_token"];
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString("sondra_server_url", cleanUrl);
-      await prefs.setString("sondra_token", jwtToken);
-      baseUrl = cleanUrl;
-      token = jwtToken;
-      dio.options.baseUrl = cleanUrl;
-      startSseConnection();
-      return true;
-    } catch (e) {
-      print("Login failed: $e");
-      return false;
-    }
+    return _autoLogin();
   }
 
   Future<void> logout() async {
-    if (_isAndroid) {
-      // Android: just clear in-memory — no persisted state
-      token = null;
-      sseSubscription?.cancel();
-      return;
-    }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove("sondra_token");
     token = null;
     sseSubscription?.cancel();
   }
