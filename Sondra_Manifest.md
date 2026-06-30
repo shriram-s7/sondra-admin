@@ -14,7 +14,21 @@ Sondra Music is a premium cross-platform music streaming player built with Flutt
 6. **Platform Integrations & Keyboard Controls:** 
    - **Windows SMTC:** Full System Media Transport Controls integration (locks media keys, displays title/artist/album on screen, and allows background controls when minimized).
    - **Hotkeys:** Space/P toggles playback, Left/Right arrows seek 10s, and Media buttons work natively.
-   - **Android Foreground Service:** Integrates `audio_service` to run background playback, manages a sticky notification drawer, and handles Bluetooth earbud commands (single-click play/pause, double-click skips, left earbud prev/restart).
+   - **Android Foreground Service:** Integrates `audio_service` to run background playback, manages a sticky notification drawer, and handles Bluetooth earbud commands (click->play/pause, double-click->next, left earbud->prev).
+   - **Earbud SMTC fix:** Uses `click(MediaButton.next/previous)` instead of `skipToNext/skipToPrevious` for correct media button behavior on Windows.
+7. **Universal Playlist Search:** Real-time text-based search across all library songs, works in both mobile and desktop layouts.
+8. **Personal Playlist Creation:** Create personal (in-app) and offline playlists with a SongPicker dialog. Supports delete with confirmation dialog.
+9. **Banner-first Loading (Change 6):** `currentSong` is only updated AFTER `playUri()` succeeds, preventing the now-playing banner from showing a song that hasn't loaded yet.
+10. **Streaming Resilience (5 Improvements):**
+    - **Retry on Error (Improvement 1):** Up to 3 automatic retries at 1.5s intervals with "Reconnecting... (attempt N/3)" feedback before skipping to next song.
+    - **Buffer Configuration (Improvement 2):** Android buffer tuned via `AndroidLoadControl` — 15s min buffer, 50s max buffer, 2.5s playback start threshold.
+    - **Pre-buffer Next Track (Improvement 3):** HTTP Range request (bytes=0-128KB) to warm up the connection for the next song after playback starts.
+    - **Buffering Timeout (Improvement 4):** 10-second timer shows "Slow connection, still buffering..." message; 25-second timer triggers auto-retry.
+    - **Stream Caching (Improvement 5):** Backend `Cache-Control` changed from `no-cache` to `private, max-age=3600` to allow client-side caching.
+11. **Platform-specific Authentication:**
+    - **Android:** 4-digit passcode lock with 1-hour inactivity timeout (disabled during active playback). Session timeout timer pauses when app goes to background.
+    - **Windows:** No authentication at all — opens directly to HomeScreen.
+12. **Extended Repeat Modes:** Shuffle with reshuffle at end-of-playlist, repeat-one (restart current), repeat-all (loop entire playlist). Back-to-back repeat prevention via first-song swap on reshuffle.
 
 ---
 
@@ -74,33 +88,42 @@ Here is the complete source code for all the core files in the project:
 ### 1. `app/lib/main.dart`
 [main.dart](file:///e:/PROJECT SONDRA/sondra/app/lib/main.dart)
 ```dart
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_service/audio_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/audio_handler.dart';
 import 'services/offline_storage.dart';
+import 'services/api_service.dart';
 import 'providers/player_provider.dart';
 import 'screens/setup_screen.dart';
+import 'screens/home_screen.dart';
 
-// Global navigator key so the mini-player overlay can show modal sheets
-// even when the context is above the navigator tree.
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize offline storage for offline playlists
   await OfflineStorage().init();
+  await ApiService().init();
 
-  // AudioService.init may fail silently on Windows/desktop; fall back to
-  // direct handler so just_audio still works natively.
+  if (!kIsWeb && Platform.isAndroid) {
+    try {
+      await const MethodChannel('com.sondra.music/notification')
+          .invokeMethod('ensureChannel');
+    } catch (_) {}
+  }
+
   try {
     globalAudioHandler = await AudioService.init(
       builder: () => SondraAudioHandler(),
       config: const AudioServiceConfig(
         androidNotificationChannelId: 'com.sondra.music.channel.audio',
         androidNotificationChannelName: 'Sondra Music Playback',
+        androidNotificationChannelDescription: 'Music playback controls',
         androidNotificationOngoing: true,
         androidShowNotificationBadge: true,
       ),
@@ -142,22 +165,17 @@ class SondraApp extends StatelessWidget {
           bodyMedium: TextStyle(color: Color(0xFF9CA3AF)),
         ),
       ),
-
-      // builder wraps the entire navigator stack, so the MiniPlayer
-      // is rendered above ALL routes (home, playlists, now-playing, etc.)
       builder: (context, child) {
         return Consumer(
           builder: (ctx, ref, _) {
             final playerState = ref.watch(playerProvider);
 
-            // Wrap in a global Focus widget to handle global Spacebar & 'P' keyboard shortcuts
             return Focus(
               autofocus: true,
               focusNode: FocusNode(debugLabel: 'GlobalAppFocus'),
               onKeyEvent: (node, event) {
                 final isKeyDown = event is KeyDownEvent;
                 if (isKeyDown) {
-                  // Bypass hotkeys if a text input currently has active focus
                   final primaryFocus = FocusManager.instance.primaryFocus;
                   final hasInputFocus = primaryFocus != null &&
                       (primaryFocus.context?.widget is EditableText ||
@@ -201,21 +219,151 @@ class SondraApp extends StatelessWidget {
               },
               child: Stack(
                 children: [
-                  // All app routes live inside `child`
                   child!,
-
-                  // Android mobile floating mini-player overlay.
-                  // Windows uses its own inline layout in HomeScreen.
-
                 ],
               ),
             );
           },
         );
       },
-
-      home: const SetupScreen(),
+      home: const AppEntryPoint(),
     );
+  }
+}
+
+class AppEntryPoint extends StatefulWidget {
+  const AppEntryPoint({super.key});
+
+  @override
+  State<AppEntryPoint> createState() => _AppEntryPointState();
+}
+
+class _AppEntryPointState extends State<AppEntryPoint> with WidgetsBindingObserver {
+  bool _isChecking = true;
+  bool _showPasscode = false;
+  bool _isSetupFirstTime = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkPasscode();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Future<void> _checkPasscode() async {
+    if (Platform.isWindows) {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _showPasscode = false;
+        });
+      }
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final passcodeSet = prefs.getBool('passcode_set') ?? false;
+
+    if (!passcodeSet) {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _showPasscode = true;
+          _isSetupFirstTime = true;
+        });
+      }
+      return;
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final lastActive = prefs.getInt('last_active_time') ?? now;
+    final elapsed = now - lastActive;
+    const oneHour = 60 * 60 * 1000;
+
+    final isPlaying = globalAudioHandler.player.playing;
+
+    if (elapsed > oneHour && !isPlaying) {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _showPasscode = true;
+          _isSetupFirstTime = false;
+        });
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _showPasscode = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (Platform.isWindows) return;
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      if (!globalAudioHandler.player.playing) {
+        SharedPreferences.getInstance().then((prefs) {
+          prefs.setInt('last_active_time', DateTime.now().millisecondsSinceEpoch);
+        });
+      }
+    }
+    if (state == AppLifecycleState.resumed) {
+      SharedPreferences.getInstance().then((prefs) async {
+        final passcodeSet = prefs.getBool('passcode_set') ?? false;
+        if (!passcodeSet) return;
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final lastActive = prefs.getInt('last_active_time') ?? now;
+        final elapsed = now - lastActive;
+        const oneHour = 60 * 60 * 1000;
+
+        final isPlaying = globalAudioHandler.player.playing;
+
+        if (elapsed > oneHour && !isPlaying) {
+          if (mounted) {
+            setState(() {
+              _showPasscode = true;
+              _isSetupFirstTime = false;
+            });
+          }
+        }
+      });
+    }
+  }
+
+  void _handleUnlock() {
+    setState(() {
+      _showPasscode = false;
+      _isSetupFirstTime = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isChecking) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF08070D),
+        body: Center(child: CircularProgressIndicator(color: Color(0xFF8B5CF6))),
+      );
+    }
+
+    if (_showPasscode) {
+      return SetupScreen(
+        key: ValueKey(_isSetupFirstTime ? 'setup' : 'entry'),
+        isSetup: _isSetupFirstTime,
+        onUnlock: _handleUnlock,
+      );
+    }
+
+    return const HomeScreen();
   }
 }
 ```
@@ -249,6 +397,7 @@ class PlayerState {
   final List<Map<String, dynamic>> activePlaylist;
   final List<Map<String, dynamic>> queue;
   final String activePlaylistName;
+  final String? bufferingMessage;
 
   PlayerState({
     this.currentSong,
@@ -263,6 +412,7 @@ class PlayerState {
     this.activePlaylist = const [],
     this.queue = const [],
     this.activePlaylistName = "Song Pool",
+    this.bufferingMessage,
   });
 
   PlayerState copyWith({
@@ -278,6 +428,7 @@ class PlayerState {
     List<Map<String, dynamic>>? activePlaylist,
     List<Map<String, dynamic>>? queue,
     String? activePlaylistName,
+    String? bufferingMessage,
   }) {
     return PlayerState(
       currentSong: currentSong ?? this.currentSong,
@@ -292,6 +443,7 @@ class PlayerState {
       activePlaylist: activePlaylist ?? this.activePlaylist,
       queue: queue ?? this.queue,
       activePlaylistName: activePlaylistName ?? this.activePlaylistName,
+      bufferingMessage: bufferingMessage,
     );
   }
 }
@@ -304,6 +456,8 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   StreamSubscription? _stateSub;
   bool _isBusy = false;
   DateTime? _lastActionTime;
+  Timer? _bufferingTimer;
+  Timer? _bufferingSevereTimer;
 
   PlayerNotifier() : super(PlayerState()) {
     _posSub = globalAudioHandler.player.positionStream.listen((pos) {
@@ -318,11 +472,42 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
 
     _stateSub = globalAudioHandler.player.playerStateStream.listen((pState) {
       if (_isBusy) return;
+      final wasBuffering = state.isBuffering;
+      final nowBuffering = pState.processingState == ProcessingState.buffering ||
+                           pState.processingState == ProcessingState.loading;
+
       state = state.copyWith(
         isPlaying: pState.playing,
-        isBuffering: pState.processingState == ProcessingState.buffering ||
-                     pState.processingState == ProcessingState.loading,
+        isBuffering: nowBuffering,
       );
+
+      // Buffering timeout management (Improvement 4)
+      if (nowBuffering && !wasBuffering) {
+        _bufferingTimer?.cancel();
+        _bufferingSevereTimer?.cancel();
+        _bufferingTimer = Timer(const Duration(seconds: 10), () {
+          state = state.copyWith(
+            bufferingMessage: "Slow connection, still buffering...",
+          );
+        });
+        _bufferingSevereTimer = Timer(const Duration(seconds: 25), () {
+          state = state.copyWith(
+            bufferingMessage: null,
+          );
+          _retryCurrentSong();
+        });
+      } else if (!nowBuffering) {
+        if (wasBuffering) {
+          _bufferingTimer?.cancel();
+          _bufferingSevereTimer?.cancel();
+          _bufferingTimer = null;
+          _bufferingSevereTimer = null;
+        }
+        if (state.bufferingMessage != null) {
+          state = state.copyWith(bufferingMessage: null);
+        }
+      }
+
       if (pState.processingState == ProcessingState.completed) {
         if (state.repeat == "one") {
           state = state.copyWith(position: Duration.zero);
@@ -341,26 +526,8 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       }
     });
 
-    // Register Media / Earbud skip controls callback from background handler
-    // CHANGE 5: 600ms debounce prevents double-tap earbud from firing twice
-    globalAudioHandler.onSkipToNext = () async {
-      final now = DateTime.now();
-      if (_lastActionTime != null &&
-          now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
-        return;
-      }
-      _lastActionTime = now;
-      handleNext();
-    };
-    globalAudioHandler.onSkipToPrevious = () async {
-      final now = DateTime.now();
-      if (_lastActionTime != null &&
-          now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
-        return;
-      }
-      _lastActionTime = now;
-      handlePrev();
-    };
+    globalAudioHandler.onSkipToNext = () => handleNext();
+    globalAudioHandler.onSkipToPrevious = () => handlePrev();
   }
 
   Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName, bool internalCall = false}) async {
@@ -406,25 +573,25 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         isBuffering: true,
       );
 
+      // 3. INSTANT PLAYBACK: Use local file if downloaded, otherwise stream
+      String directUrl;
+      final localPath = song["local_file_path"];
+      if (localPath != null && await File(localPath).exists()) {
+        directUrl = localPath;
+      } else {
+        directUrl = "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
+      }
+
+      final mediaItem = MediaItem(
+        id: song["id"].toString(),
+        album: song["album"] ?? "Unknown Album",
+        title: song["title"] ?? "Unknown Title",
+        artist: song["artist"] ?? "Unknown Artist",
+        duration: Duration(seconds: song["duration_seconds"] ?? 0),
+        artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover"),
+      );
+
       try {
-        // 3. INSTANT PLAYBACK: Use local file if downloaded, otherwise stream
-        String directUrl;
-        final localPath = song["local_file_path"];
-        if (localPath != null && await File(localPath).exists()) {
-          directUrl = localPath;
-        } else {
-          directUrl = "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
-        }
-
-        final mediaItem = MediaItem(
-          id: song["id"].toString(),
-          album: song["album"] ?? "Unknown Album",
-          title: song["title"] ?? "Unknown Title",
-          artist: song["artist"] ?? "Unknown Artist",
-          duration: Duration(seconds: song["duration_seconds"] ?? 0),
-          artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover"),
-        );
-
         await globalAudioHandler.playUri(directUrl, mediaItem);
 
         // CHANGE 6: Only now that playUri() has succeeded do we update the banner song.
@@ -437,10 +604,41 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         if (startSeconds != null) {
           await globalAudioHandler.seek(Duration(seconds: startSeconds));
         }
+
+        // Warm up connection for next song (Improvement 3)
+        _preloadNextSong();
       } catch (e) {
         print("Error loading song in provider: $e");
-        // Skip to next song automatically on loading error (Rule 5)
-        handleNext();
+        // Retry up to 3 times with 1.5s delay before skipping (Improvement 1)
+        bool retrySuccess = false;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+          await Future.delayed(const Duration(milliseconds: 1500));
+          state = state.copyWith(
+            isBuffering: true,
+            bufferingMessage: "Reconnecting... (attempt $attempt/3)",
+          );
+          try {
+            await globalAudioHandler.playUri(directUrl, mediaItem);
+            retrySuccess = true;
+            break;
+          } catch (retryErr) {
+            print("Retry $attempt/3 failed: $retryErr");
+          }
+        }
+        if (retrySuccess) {
+          state = state.copyWith(
+            currentSong: song,
+            isBuffering: false,
+            isPlaying: true,
+            bufferingMessage: null,
+          );
+          if (startSeconds != null) {
+            await globalAudioHandler.seek(Duration(seconds: startSeconds));
+          }
+          _preloadNextSong();
+        } else {
+          handleNext();
+        }
       }
     } finally {
       _isBusy = false;
@@ -593,14 +791,21 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       if (idx != -1) {
         int nextIdx = idx + 1;
         if (nextIdx >= state.activePlaylist.length) {
-          // RULE 5 - Loop/Repeat checks
-          if (state.repeat == "all") {
-            nextIdx = 0;
-            await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
-          } else {
-            // End of playlist: stop playback and reset position
-            await globalAudioHandler.pause();
-            await seek(Duration.zero);
+          if (state.shuffle && state.originalPlaylist.isNotEmpty) {
+            // Shuffle mode: generate next valid shuffled playback sequence (or restart it)
+            final newShuffled = List<Map<String, dynamic>>.from(state.originalPlaylist);
+            _secureShuffle(newShuffled);
+            if (newShuffled.length > 1 && newShuffled.first["id"] == state.currentSong!["id"]) {
+              // Swap the first song with the second to avoid immediate repeat
+              final temp = newShuffled[0];
+              newShuffled[0] = newShuffled[1];
+              newShuffled[1] = temp;
+            }
+            state = state.copyWith(activePlaylist: newShuffled);
+            await playSong(newShuffled.first, state.originalPlaylist, internalCall: true);
+          } else if (state.activePlaylist.isNotEmpty) {
+            // Linear mode: loop back to the first song, looping forever
+            await playSong(state.activePlaylist[0], state.originalPlaylist, internalCall: true);
           }
         } else {
           await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
@@ -687,12 +892,49 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     await playSong(startSong, playlist, playlistName: playlistName);
   }
 
+  Future<void> _retryCurrentSong() async {
+    if (state.currentSong == null || state.activePlaylist.isEmpty) return;
+    _isBusy = false;
+    await playSong(
+      state.currentSong!,
+      state.activePlaylist,
+      playlistName: state.activePlaylistName,
+      internalCall: true,
+    );
+  }
+
+  Future<void> _preloadNextSong() async {
+    Map<String, dynamic>? nextSong;
+    if (state.queue.isNotEmpty) {
+      nextSong = state.queue.first;
+    } else if (state.activePlaylist.isNotEmpty && state.currentSong != null) {
+      final idx = state.activePlaylist.indexWhere((s) => s["id"] == state.currentSong!["id"]);
+      if (idx != -1 && idx + 1 < state.activePlaylist.length) {
+        nextSong = state.activePlaylist[idx + 1];
+      } else if (state.repeat == "all" && state.activePlaylist.isNotEmpty) {
+        nextSong = state.activePlaylist[0];
+      }
+    }
+    if (nextSong == null) return;
+    try {
+      final localPath = nextSong["local_file_path"];
+      if (localPath != null && await File(localPath).exists()) return;
+      final url = "${_api.baseUrl}/api/stream/${nextSong["id"]}/proxy?token=${_api.token}";
+      final request = await HttpClient().getUrl(Uri.parse(url));
+      request.headers.set("Range", "bytes=0-131072");
+      final response = await request.close();
+      await response.drain();
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
     _posSub?.cancel();
     _durSub?.cancel();
     _stateSub?.cancel();
     _positionLogTimer?.cancel();
+    _bufferingTimer?.cancel();
+    _bufferingSevereTimer?.cancel();
     super.dispose();
   }
 }
@@ -709,215 +951,294 @@ final showBottomNavBarProvider = StateProvider<bool>((ref) => false);
 [setup_screen.dart](file:///e:/PROJECT SONDRA/sondra/app/lib/screens/setup_screen.dart)
 ```dart
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'home_screen.dart';
 
 class SetupScreen extends StatefulWidget {
-  const SetupScreen({super.key});
+  final bool isSetup;
+  final VoidCallback? onUnlock;
+
+  const SetupScreen({super.key, this.isSetup = false, this.onUnlock});
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
 }
 
 class _SetupScreenState extends State<SetupScreen> {
-  final _usernameController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _isLoading = false;
+  final _codeController = TextEditingController();
+  bool _isSetup = false;
+  bool _showConfirm = false;
   String? _errorMessage;
+  String _firstEntry = "";
 
   @override
   void initState() {
     super.initState();
-    _checkExistingSession();
+    _checkIfSetupNeeded();
   }
 
-  Future<void> _checkExistingSession() async {
-    final api = ApiService();
-    await api.init();
-    if (api.baseUrl != null && api.token != null) {
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
-      }
+  Future<void> _checkIfSetupNeeded() async {
+    final prefs = await SharedPreferences.getInstance();
+    final passcodeSet = prefs.getBool('passcode_set') ?? false;
+    if (mounted) {
+      setState(() {
+        _isSetup = !passcodeSet || widget.isSetup;
+      });
     }
   }
 
-  Future<void> _handleLogin() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+  Future<void> _submitPasscode() async {
+    final code = _codeController.text.trim();
 
-    final username = _usernameController.text.trim();
-    final password = _passwordController.text.trim();
-
-    if (username.isEmpty || password.isEmpty) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = "All fields are required.";
-      });
+    if (code.length != 4) {
+      setState(() => _errorMessage = "Enter exactly 4 digits.");
       return;
     }
 
-    final success = await ApiService().login(username, password);
-    
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
+    if (_isSetup) {
+      if (!_showConfirm) {
+        _firstEntry = code;
+        setState(() {
+          _showConfirm = true;
+          _errorMessage = null;
+          _codeController.clear();
+        });
+        return;
+      }
 
-      if (success) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
+      if (code != _firstEntry) {
+        setState(() {
+          _errorMessage = "Passcodes do not match.";
+          _showConfirm = false;
+          _firstEntry = "";
+          _codeController.clear();
+        });
+        return;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('passcode_hash', _firstEntry);
+      await prefs.setBool('passcode_set', true);
+      await prefs.setInt('last_active_time', DateTime.now().millisecondsSinceEpoch);
+
+      if (widget.onUnlock != null) {
+        widget.onUnlock!();
+      } else {
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+          );
+        }
+      }
+    } else {
+      final prefs = await SharedPreferences.getInstance();
+      final savedHash = prefs.getString('passcode_hash') ?? '';
+
+      if (code == savedHash) {
+        await prefs.setInt('last_active_time', DateTime.now().millisecondsSinceEpoch);
+        if (widget.onUnlock != null) {
+          widget.onUnlock!();
+        }
       } else {
         setState(() {
-          _errorMessage = "Authentication failed. Check your credentials.";
+          _errorMessage = "Incorrect passcode.";
+          _codeController.clear();
         });
       }
     }
   }
 
   @override
+  void dispose() {
+    _codeController.dispose();
+    super.dispose();
+  }
+
+  void _onDigit(String digit) {
+    if (_codeController.text.length < 4) {
+      _codeController.text += digit;
+      if (_codeController.text.length == 4) {
+        _submitPasscode();
+      }
+    }
+  }
+
+  void _onDelete() {
+    if (_codeController.text.isNotEmpty) {
+      _codeController.text = _codeController.text.substring(0, _codeController.text.length - 1);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0E17),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const Duration(milliseconds: 24) == Duration.zero 
-              ? EdgeInsets.zero 
-              : const EdgeInsets.symmetric(horizontal: 28),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(
-                Icons.music_note_rounded,
-                color: Color(0xFF8B5CF6),
-                size: 72,
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                "Sondra Music",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                "Private Server Streaming App",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white60,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 40),
-              
-              if (_errorMessage != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.redAccent.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
-                  ),
-                  child: Text(
-                    _errorMessage!,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 13),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
+      backgroundColor: const Color(0xFF08070D),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.lock_outline_rounded, color: Color(0xFF8B5CF6), size: 56),
                 const SizedBox(height: 16),
-              ],
-
-              // Username Field
-              TextField(
-                controller: _usernameController,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: "Admin Username",
-                  labelStyle: const TextStyle(color: Colors.white60),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.05),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
+                Text(
+                  _isSetup
+                      ? (_showConfirm ? "Confirm Passcode" : "Set Passcode")
+                      : "Enter Passcode",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-
-              // Password Field
-              TextField(
-                controller: _passwordController,
-                obscureText: true,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: "Password",
-                  labelStyle: const TextStyle(color: Colors.white60),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.05),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
-                  ),
+                const SizedBox(height: 8),
+                Text(
+                  _isSetup
+                      ? "Create a 4-digit passcode to protect your app."
+                      : "Enter your 4-digit passcode to unlock.",
+                  style: const TextStyle(color: Colors.white60, fontSize: 13),
                 ),
-              ),
-              const SizedBox(height: 24),
+                const SizedBox(height: 32),
 
-              ElevatedButton(
-                onPressed: _isLoading ? null : _handleLogin,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF8B5CF6),
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                if (_errorMessage != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+                    ),
+                    child: Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: Colors.redAccent, fontSize: 13),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text(
-                        "Log In",
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(4, (i) {
+                    final filled = i < _codeController.text.length;
+                    return Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8),
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: filled ? const Color(0xFF8B5CF6) : Colors.white24,
                       ),
-              ),
-            ],
+                    );
+                  }),
+                ),
+                const SizedBox(height: 32),
+
+                _buildNumpad(),
+                const SizedBox(height: 24),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: _submitPasscode,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8B5CF6),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text(
+                      _isSetup ? (_showConfirm ? "Confirm" : "Next") : "Unlock",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+
+                if (!_isSetup)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: TextButton(
+                      onPressed: () async {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.remove('passcode_hash');
+                        await prefs.remove('passcode_set');
+                        if (mounted) {
+                          setState(() {
+                            _isSetup = true;
+                            _showConfirm = false;
+                            _errorMessage = null;
+                            _codeController.clear();
+                          });
+                        }
+                      },
+                      child: const Text(
+                        "Reset Passcode",
+                        style: TextStyle(color: Colors.white38, fontSize: 13),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    _passwordController.dispose();
-    super.dispose();
+  Widget _buildNumpad() {
+    return Column(
+      children: [
+        _buildNumpadRow(["1", "2", "3"]),
+        _buildNumpadRow(["4", "5", "6"]),
+        _buildNumpadRow(["7", "8", "9"]),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(width: 72),
+            _numpadKey("0"),
+            GestureDetector(
+              onTap: _onDelete,
+              child: Container(
+                width: 72,
+                height: 56,
+                alignment: Alignment.center,
+                child: const Icon(Icons.backspace_outlined, color: Colors.white54, size: 24),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNumpadRow(List<String> keys) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: keys.map((k) => _numpadKey(k)).toList(),
+    );
+  }
+
+  Widget _numpadKey(String digit) {
+    return GestureDetector(
+      onTap: () => _onDigit(digit),
+      child: Container(
+        width: 72,
+        height: 56,
+        margin: const EdgeInsets.all(4),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          digit,
+          style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w500),
+        ),
+      ),
+    );
   }
 }
 ```
@@ -934,7 +1255,6 @@ import '../services/offline_storage.dart';
 import '../providers/player_provider.dart';
 import '../widgets/song_cover.dart';
 import '../widgets/mini_player.dart';
-import 'setup_screen.dart';
 import 'now_playing_screen.dart';
 import 'create_offline_playlist_screen.dart';
 import 'offline_playlist_screen.dart';
@@ -2140,54 +2460,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           
           const SizedBox(height: 16),
-          
-          // Log Out Button
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF111019),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withOpacity(0.06)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  "Logout",
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  "Disconnect from the current Sondra private server.",
-                  style: TextStyle(color: Colors.white60, fontSize: 13),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () async {
-                      await ApiService().logout();
-                      if (mounted) {
-                        Navigator.of(context).pushReplacement(
-                          MaterialPageRoute(builder: (_) => const SetupScreen()),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.redAccent.withOpacity(0.1),
-                      foregroundColor: Colors.redAccent,
-                      elevation: 0,
-                      side: BorderSide(color: Colors.redAccent.withOpacity(0.2)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    icon: const Icon(Icons.logout_rounded),
-                    label: const Text("Log Out"),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -4622,11 +4894,19 @@ import 'package:smtc_windows/smtc_windows.dart';
 import 'package:audio_session/audio_session.dart';
 
 class SondraAudioHandler extends BaseAudioHandler {
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player = AudioPlayer(
+    audioLoadConfiguration: const AudioLoadConfiguration(
+      androidLoadControl: AndroidLoadControl(
+        minBufferDuration: Duration(seconds: 15),
+        maxBufferDuration: Duration(seconds: 50),
+        bufferForPlaybackDuration: Duration(milliseconds: 2500),
+        bufferForPlaybackAfterRebufferDuration: Duration(seconds: 5),
+      ),
+    ),
+  );
   SMTCWindows? _smtc;
   Future<void>? _initFuture;
   bool _isLoading = false;
-  DateTime? _lastSmtcAction;
 
   // Callbacks hooked by the Riverpod notifier
   Future<void> Function()? onSkipToNext;
@@ -4679,10 +4959,10 @@ class SondraAudioHandler extends BaseAudioHandler {
           pause();
           break;
         case PressedButton.next:
-          skipToNext();
+          click(MediaButton.next);
           break;
         case PressedButton.previous:
-          skipToPrevious();
+          click(MediaButton.previous);
           break;
         default:
           break;
@@ -8026,7 +8306,7 @@ async def stream_song_proxy(
         # Set up response headers
         resp_headers = {
             "Accept-Ranges": "bytes",
-            "Cache-Control": "no-cache",
+            "Cache-Control": "private, max-age=3600",
         }
         if "content-range" in response.headers:
             resp_headers["Content-Range"] = response.headers["content-range"]

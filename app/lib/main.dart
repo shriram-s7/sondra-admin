@@ -167,6 +167,15 @@ class _AppEntryPointState extends State<AppEntryPoint> with WidgetsBindingObserv
   }
 
   Future<void> _checkPasscode() async {
+    if (Platform.isWindows) {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _showPasscode = false;
+        });
+      }
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     final passcodeSet = prefs.getBool('passcode_set') ?? false;
 
@@ -208,6 +217,7 @@ class _AppEntryPointState extends State<AppEntryPoint> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (Platform.isWindows) return;
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       if (!globalAudioHandler.player.playing) {
         SharedPreferences.getInstance().then((prefs) {
