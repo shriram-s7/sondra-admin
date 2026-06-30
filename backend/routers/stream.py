@@ -144,7 +144,7 @@ async def stream_song_proxy(
         # Set up response headers
         resp_headers = {
             "Accept-Ranges": "bytes",
-            "Cache-Control": "no-cache",
+            "Cache-Control": "private, max-age=3600",
         }
         if "content-range" in response.headers:
             resp_headers["Content-Range"] = response.headers["content-range"]

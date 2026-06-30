@@ -24,6 +24,7 @@ class PlayerState {
   final List<Map<String, dynamic>> activePlaylist;
   final List<Map<String, dynamic>> queue;
   final String activePlaylistName;
+  final String? bufferingMessage;
 
   PlayerState({
     this.currentSong,
@@ -38,6 +39,7 @@ class PlayerState {
     this.activePlaylist = const [],
     this.queue = const [],
     this.activePlaylistName = "Song Pool",
+    this.bufferingMessage,
   });
 
   PlayerState copyWith({
@@ -53,6 +55,7 @@ class PlayerState {
     List<Map<String, dynamic>>? activePlaylist,
     List<Map<String, dynamic>>? queue,
     String? activePlaylistName,
+    String? bufferingMessage,
   }) {
     return PlayerState(
       currentSong: currentSong ?? this.currentSong,
@@ -67,6 +70,7 @@ class PlayerState {
       activePlaylist: activePlaylist ?? this.activePlaylist,
       queue: queue ?? this.queue,
       activePlaylistName: activePlaylistName ?? this.activePlaylistName,
+      bufferingMessage: bufferingMessage,
     );
   }
 }
@@ -79,6 +83,8 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   StreamSubscription? _stateSub;
   bool _isBusy = false;
   DateTime? _lastActionTime;
+  Timer? _bufferingTimer;
+  Timer? _bufferingSevereTimer;
 
   PlayerNotifier() : super(PlayerState()) {
     _posSub = globalAudioHandler.player.positionStream.listen((pos) {
@@ -93,11 +99,42 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
 
     _stateSub = globalAudioHandler.player.playerStateStream.listen((pState) {
       if (_isBusy) return;
+      final wasBuffering = state.isBuffering;
+      final nowBuffering = pState.processingState == ProcessingState.buffering ||
+                           pState.processingState == ProcessingState.loading;
+
       state = state.copyWith(
         isPlaying: pState.playing,
-        isBuffering: pState.processingState == ProcessingState.buffering ||
-                     pState.processingState == ProcessingState.loading,
+        isBuffering: nowBuffering,
       );
+
+      // Buffering timeout management (Improvement 4)
+      if (nowBuffering && !wasBuffering) {
+        _bufferingTimer?.cancel();
+        _bufferingSevereTimer?.cancel();
+        _bufferingTimer = Timer(const Duration(seconds: 10), () {
+          state = state.copyWith(
+            bufferingMessage: "Slow connection, still buffering...",
+          );
+        });
+        _bufferingSevereTimer = Timer(const Duration(seconds: 25), () {
+          state = state.copyWith(
+            bufferingMessage: null,
+          );
+          _retryCurrentSong();
+        });
+      } else if (!nowBuffering) {
+        if (wasBuffering) {
+          _bufferingTimer?.cancel();
+          _bufferingSevereTimer?.cancel();
+          _bufferingTimer = null;
+          _bufferingSevereTimer = null;
+        }
+        if (state.bufferingMessage != null) {
+          state = state.copyWith(bufferingMessage: null);
+        }
+      }
+
       if (pState.processingState == ProcessingState.completed) {
         if (state.repeat == "one") {
           state = state.copyWith(position: Duration.zero);
@@ -163,25 +200,25 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         isBuffering: true,
       );
 
+      // 3. INSTANT PLAYBACK: Use local file if downloaded, otherwise stream
+      String directUrl;
+      final localPath = song["local_file_path"];
+      if (localPath != null && await File(localPath).exists()) {
+        directUrl = localPath;
+      } else {
+        directUrl = "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
+      }
+
+      final mediaItem = MediaItem(
+        id: song["id"].toString(),
+        album: song["album"] ?? "Unknown Album",
+        title: song["title"] ?? "Unknown Title",
+        artist: song["artist"] ?? "Unknown Artist",
+        duration: Duration(seconds: song["duration_seconds"] ?? 0),
+        artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover"),
+      );
+
       try {
-        // 3. INSTANT PLAYBACK: Use local file if downloaded, otherwise stream
-        String directUrl;
-        final localPath = song["local_file_path"];
-        if (localPath != null && await File(localPath).exists()) {
-          directUrl = localPath;
-        } else {
-          directUrl = "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
-        }
-
-        final mediaItem = MediaItem(
-          id: song["id"].toString(),
-          album: song["album"] ?? "Unknown Album",
-          title: song["title"] ?? "Unknown Title",
-          artist: song["artist"] ?? "Unknown Artist",
-          duration: Duration(seconds: song["duration_seconds"] ?? 0),
-          artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover"),
-        );
-
         await globalAudioHandler.playUri(directUrl, mediaItem);
 
         // CHANGE 6: Only now that playUri() has succeeded do we update the banner song.
@@ -194,10 +231,41 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         if (startSeconds != null) {
           await globalAudioHandler.seek(Duration(seconds: startSeconds));
         }
+
+        // Warm up connection for next song (Improvement 3)
+        _preloadNextSong();
       } catch (e) {
         print("Error loading song in provider: $e");
-        // Skip to next song automatically on loading error (Rule 5)
-        handleNext();
+        // Retry up to 3 times with 1.5s delay before skipping (Improvement 1)
+        bool retrySuccess = false;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+          await Future.delayed(const Duration(milliseconds: 1500));
+          state = state.copyWith(
+            isBuffering: true,
+            bufferingMessage: "Reconnecting... (attempt $attempt/3)",
+          );
+          try {
+            await globalAudioHandler.playUri(directUrl, mediaItem);
+            retrySuccess = true;
+            break;
+          } catch (retryErr) {
+            print("Retry $attempt/3 failed: $retryErr");
+          }
+        }
+        if (retrySuccess) {
+          state = state.copyWith(
+            currentSong: song,
+            isBuffering: false,
+            isPlaying: true,
+            bufferingMessage: null,
+          );
+          if (startSeconds != null) {
+            await globalAudioHandler.seek(Duration(seconds: startSeconds));
+          }
+          _preloadNextSong();
+        } else {
+          handleNext();
+        }
       }
     } finally {
       _isBusy = false;
@@ -451,12 +519,49 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     await playSong(startSong, playlist, playlistName: playlistName);
   }
 
+  Future<void> _retryCurrentSong() async {
+    if (state.currentSong == null || state.activePlaylist.isEmpty) return;
+    _isBusy = false;
+    await playSong(
+      state.currentSong!,
+      state.activePlaylist,
+      playlistName: state.activePlaylistName,
+      internalCall: true,
+    );
+  }
+
+  Future<void> _preloadNextSong() async {
+    Map<String, dynamic>? nextSong;
+    if (state.queue.isNotEmpty) {
+      nextSong = state.queue.first;
+    } else if (state.activePlaylist.isNotEmpty && state.currentSong != null) {
+      final idx = state.activePlaylist.indexWhere((s) => s["id"] == state.currentSong!["id"]);
+      if (idx != -1 && idx + 1 < state.activePlaylist.length) {
+        nextSong = state.activePlaylist[idx + 1];
+      } else if (state.repeat == "all" && state.activePlaylist.isNotEmpty) {
+        nextSong = state.activePlaylist[0];
+      }
+    }
+    if (nextSong == null) return;
+    try {
+      final localPath = nextSong["local_file_path"];
+      if (localPath != null && await File(localPath).exists()) return;
+      final url = "${_api.baseUrl}/api/stream/${nextSong["id"]}/proxy?token=${_api.token}";
+      final request = await HttpClient().getUrl(Uri.parse(url));
+      request.headers.set("Range", "bytes=0-131072");
+      final response = await request.close();
+      await response.drain();
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
     _posSub?.cancel();
     _durSub?.cancel();
     _stateSub?.cancel();
     _positionLogTimer?.cancel();
+    _bufferingTimer?.cancel();
+    _bufferingSevereTimer?.cancel();
     super.dispose();
   }
 }

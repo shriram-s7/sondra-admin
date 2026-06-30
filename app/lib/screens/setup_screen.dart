@@ -1,212 +1,291 @@
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'home_screen.dart';
 
 class SetupScreen extends StatefulWidget {
-  const SetupScreen({super.key});
+  final bool isSetup;
+  final VoidCallback? onUnlock;
+
+  const SetupScreen({super.key, this.isSetup = false, this.onUnlock});
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
 }
 
 class _SetupScreenState extends State<SetupScreen> {
-  final _usernameController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _isLoading = false;
+  final _codeController = TextEditingController();
+  bool _isSetup = false;
+  bool _showConfirm = false;
   String? _errorMessage;
+  String _firstEntry = "";
 
   @override
   void initState() {
     super.initState();
-    _checkExistingSession();
+    _checkIfSetupNeeded();
   }
 
-  Future<void> _checkExistingSession() async {
-    final api = ApiService();
-    await api.init();
-    if (api.baseUrl != null && api.token != null) {
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
-      }
+  Future<void> _checkIfSetupNeeded() async {
+    final prefs = await SharedPreferences.getInstance();
+    final passcodeSet = prefs.getBool('passcode_set') ?? false;
+    if (mounted) {
+      setState(() {
+        _isSetup = !passcodeSet || widget.isSetup;
+      });
     }
   }
 
-  Future<void> _handleLogin() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+  Future<void> _submitPasscode() async {
+    final code = _codeController.text.trim();
 
-    final username = _usernameController.text.trim();
-    final password = _passwordController.text.trim();
-
-    if (username.isEmpty || password.isEmpty) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = "All fields are required.";
-      });
+    if (code.length != 4) {
+      setState(() => _errorMessage = "Enter exactly 4 digits.");
       return;
     }
 
-    final success = await ApiService().login(username, password);
-    
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
+    if (_isSetup) {
+      if (!_showConfirm) {
+        _firstEntry = code;
+        setState(() {
+          _showConfirm = true;
+          _errorMessage = null;
+          _codeController.clear();
+        });
+        return;
+      }
 
-      if (success) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
+      if (code != _firstEntry) {
+        setState(() {
+          _errorMessage = "Passcodes do not match.";
+          _showConfirm = false;
+          _firstEntry = "";
+          _codeController.clear();
+        });
+        return;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('passcode_hash', _firstEntry);
+      await prefs.setBool('passcode_set', true);
+      await prefs.setInt('last_active_time', DateTime.now().millisecondsSinceEpoch);
+
+      if (widget.onUnlock != null) {
+        widget.onUnlock!();
+      } else {
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+          );
+        }
+      }
+    } else {
+      final prefs = await SharedPreferences.getInstance();
+      final savedHash = prefs.getString('passcode_hash') ?? '';
+
+      if (code == savedHash) {
+        await prefs.setInt('last_active_time', DateTime.now().millisecondsSinceEpoch);
+        if (widget.onUnlock != null) {
+          widget.onUnlock!();
+        }
       } else {
         setState(() {
-          _errorMessage = "Authentication failed. Check your credentials.";
+          _errorMessage = "Incorrect passcode.";
+          _codeController.clear();
         });
       }
     }
   }
 
   @override
+  void dispose() {
+    _codeController.dispose();
+    super.dispose();
+  }
+
+  void _onDigit(String digit) {
+    if (_codeController.text.length < 4) {
+      _codeController.text += digit;
+      if (_codeController.text.length == 4) {
+        _submitPasscode();
+      }
+    }
+  }
+
+  void _onDelete() {
+    if (_codeController.text.isNotEmpty) {
+      _codeController.text = _codeController.text.substring(0, _codeController.text.length - 1);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0E17),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const Duration(milliseconds: 24) == Duration.zero 
-              ? EdgeInsets.zero 
-              : const EdgeInsets.symmetric(horizontal: 28),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(
-                Icons.music_note_rounded,
-                color: Color(0xFF8B5CF6),
-                size: 72,
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                "Sondra Music",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                "Private Server Streaming App",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white60,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 40),
-              
-              if (_errorMessage != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.redAccent.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
-                  ),
-                  child: Text(
-                    _errorMessage!,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 13),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
+      backgroundColor: const Color(0xFF08070D),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.lock_outline_rounded, color: Color(0xFF8B5CF6), size: 56),
                 const SizedBox(height: 16),
-              ],
-
-              // Username Field
-              TextField(
-                controller: _usernameController,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: "Admin Username",
-                  labelStyle: const TextStyle(color: Colors.white60),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.05),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
+                Text(
+                  _isSetup
+                      ? (_showConfirm ? "Confirm Passcode" : "Set Passcode")
+                      : "Enter Passcode",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-
-              // Password Field
-              TextField(
-                controller: _passwordController,
-                obscureText: true,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: "Password",
-                  labelStyle: const TextStyle(color: Colors.white60),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.05),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
-                  ),
+                const SizedBox(height: 8),
+                Text(
+                  _isSetup
+                      ? "Create a 4-digit passcode to protect your app."
+                      : "Enter your 4-digit passcode to unlock.",
+                  style: const TextStyle(color: Colors.white60, fontSize: 13),
                 ),
-              ),
-              const SizedBox(height: 24),
+                const SizedBox(height: 32),
 
-              ElevatedButton(
-                onPressed: _isLoading ? null : _handleLogin,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF8B5CF6),
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                if (_errorMessage != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+                    ),
+                    child: Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: Colors.redAccent, fontSize: 13),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text(
-                        "Log In",
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(4, (i) {
+                    final filled = i < _codeController.text.length;
+                    return Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8),
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: filled ? const Color(0xFF8B5CF6) : Colors.white24,
                       ),
-              ),
-            ],
+                    );
+                  }),
+                ),
+                const SizedBox(height: 32),
+
+                _buildNumpad(),
+                const SizedBox(height: 24),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: _submitPasscode,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8B5CF6),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text(
+                      _isSetup ? (_showConfirm ? "Confirm" : "Next") : "Unlock",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+
+                if (!_isSetup)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: TextButton(
+                      onPressed: () async {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.remove('passcode_hash');
+                        await prefs.remove('passcode_set');
+                        if (mounted) {
+                          setState(() {
+                            _isSetup = true;
+                            _showConfirm = false;
+                            _errorMessage = null;
+                            _codeController.clear();
+                          });
+                        }
+                      },
+                      child: const Text(
+                        "Reset Passcode",
+                        style: TextStyle(color: Colors.white38, fontSize: 13),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    _passwordController.dispose();
-    super.dispose();
+  Widget _buildNumpad() {
+    return Column(
+      children: [
+        _buildNumpadRow(["1", "2", "3"]),
+        _buildNumpadRow(["4", "5", "6"]),
+        _buildNumpadRow(["7", "8", "9"]),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(width: 72),
+            _numpadKey("0"),
+            GestureDetector(
+              onTap: _onDelete,
+              child: Container(
+                width: 72,
+                height: 56,
+                alignment: Alignment.center,
+                child: const Icon(Icons.backspace_outlined, color: Colors.white54, size: 24),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNumpadRow(List<String> keys) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: keys.map((k) => _numpadKey(k)).toList(),
+    );
+  }
+
+  Widget _numpadKey(String digit) {
+    return GestureDetector(
+      onTap: () => _onDigit(digit),
+      child: Container(
+        width: 72,
+        height: 56,
+        margin: const EdgeInsets.all(4),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          digit,
+          style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w500),
+        ),
+      ),
+    );
   }
 }

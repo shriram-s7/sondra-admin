@@ -6,7 +6,16 @@ import 'package:smtc_windows/smtc_windows.dart';
 import 'package:audio_session/audio_session.dart';
 
 class SondraAudioHandler extends BaseAudioHandler {
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player = AudioPlayer(
+    audioLoadConfiguration: const AudioLoadConfiguration(
+      androidLoadControl: AndroidLoadControl(
+        minBufferDuration: Duration(seconds: 15),
+        maxBufferDuration: Duration(seconds: 50),
+        bufferForPlaybackDuration: Duration(milliseconds: 2500),
+        bufferForPlaybackAfterRebufferDuration: Duration(seconds: 5),
+      ),
+    ),
+  );
   SMTCWindows? _smtc;
   Future<void>? _initFuture;
   bool _isLoading = false;
@@ -63,10 +72,10 @@ class SondraAudioHandler extends BaseAudioHandler {
           pause();
           break;
         case PressedButton.next:
-          skipToNext();
+          click(MediaButton.next);
           break;
         case PressedButton.previous:
-          skipToPrevious();
+          click(MediaButton.previous);
           break;
         default:
           break;

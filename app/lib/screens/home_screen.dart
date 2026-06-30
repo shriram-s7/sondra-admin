@@ -7,7 +7,6 @@ import '../services/offline_storage.dart';
 import '../providers/player_provider.dart';
 import '../widgets/song_cover.dart';
 import '../widgets/mini_player.dart';
-import 'setup_screen.dart';
 import 'now_playing_screen.dart';
 import 'create_offline_playlist_screen.dart';
 import 'offline_playlist_screen.dart';
@@ -1211,54 +1210,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           
           const SizedBox(height: 16),
-          
-          // Log Out Button
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF111019),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withOpacity(0.06)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  "Logout",
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  "Disconnect from the current Sondra private server.",
-                  style: TextStyle(color: Colors.white60, fontSize: 13),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () async {
-                      await ApiService().logout();
-                      if (mounted) {
-                        Navigator.of(context).pushReplacement(
-                          MaterialPageRoute(builder: (_) => const SetupScreen()),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.redAccent.withOpacity(0.1),
-                      foregroundColor: Colors.redAccent,
-                      elevation: 0,
-                      side: BorderSide(color: Colors.redAccent.withOpacity(0.2)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    icon: const Icon(Icons.logout_rounded),
-                    label: const Text("Log Out"),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );

@@ -4,25 +4,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_service/audio_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/audio_handler.dart';
 import 'services/offline_storage.dart';
+import 'services/api_service.dart';
 import 'providers/player_provider.dart';
 import 'screens/setup_screen.dart';
+import 'screens/home_screen.dart';
 
-// Global navigator key so the mini-player overlay can show modal sheets
-// even when the context is above the navigator tree.
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize offline storage for offline playlists
   await OfflineStorage().init();
+  await ApiService().init();
 
-  // Pre-create the Android notification channel with HIGH importance so the
-  // media notification appears on the lock screen. This must run BEFORE
-  // AudioService.init() because audio_service creates the channel only if it
-  // doesn't exist, and defaults to IMPORTANCE_LOW which hides it on lockscreen.
   if (!kIsWeb && Platform.isAndroid) {
     try {
       await const MethodChannel('com.sondra.music/notification')
@@ -30,8 +27,6 @@ Future<void> main() async {
     } catch (_) {}
   }
 
-  // AudioService.init may fail silently on Windows/desktop; fall back to
-  // direct handler so just_audio still works natively.
   try {
     globalAudioHandler = await AudioService.init(
       builder: () => SondraAudioHandler(),
@@ -80,22 +75,17 @@ class SondraApp extends StatelessWidget {
           bodyMedium: TextStyle(color: Color(0xFF9CA3AF)),
         ),
       ),
-
-      // builder wraps the entire navigator stack, so the MiniPlayer
-      // is rendered above ALL routes (home, playlists, now-playing, etc.)
       builder: (context, child) {
         return Consumer(
           builder: (ctx, ref, _) {
             final playerState = ref.watch(playerProvider);
 
-            // Wrap in a global Focus widget to handle global Spacebar & 'P' keyboard shortcuts
             return Focus(
               autofocus: true,
               focusNode: FocusNode(debugLabel: 'GlobalAppFocus'),
               onKeyEvent: (node, event) {
                 final isKeyDown = event is KeyDownEvent;
                 if (isKeyDown) {
-                  // Bypass hotkeys if a text input currently has active focus
                   final primaryFocus = FocusManager.instance.primaryFocus;
                   final hasInputFocus = primaryFocus != null &&
                       (primaryFocus.context?.widget is EditableText ||
@@ -139,20 +129,140 @@ class SondraApp extends StatelessWidget {
               },
               child: Stack(
                 children: [
-                  // All app routes live inside `child`
                   child!,
-
-                  // Android mobile floating mini-player overlay.
-                  // Windows uses its own inline layout in HomeScreen.
-
                 ],
               ),
             );
           },
         );
       },
-
-      home: const SetupScreen(),
+      home: const AppEntryPoint(),
     );
+  }
+}
+
+class AppEntryPoint extends StatefulWidget {
+  const AppEntryPoint({super.key});
+
+  @override
+  State<AppEntryPoint> createState() => _AppEntryPointState();
+}
+
+class _AppEntryPointState extends State<AppEntryPoint> with WidgetsBindingObserver {
+  bool _isChecking = true;
+  bool _showPasscode = false;
+  bool _isSetupFirstTime = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkPasscode();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Future<void> _checkPasscode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final passcodeSet = prefs.getBool('passcode_set') ?? false;
+
+    if (!passcodeSet) {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _showPasscode = true;
+          _isSetupFirstTime = true;
+        });
+      }
+      return;
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final lastActive = prefs.getInt('last_active_time') ?? now;
+    final elapsed = now - lastActive;
+    const oneHour = 60 * 60 * 1000;
+
+    final isPlaying = globalAudioHandler.player.playing;
+
+    if (elapsed > oneHour && !isPlaying) {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _showPasscode = true;
+          _isSetupFirstTime = false;
+        });
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _showPasscode = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      if (!globalAudioHandler.player.playing) {
+        SharedPreferences.getInstance().then((prefs) {
+          prefs.setInt('last_active_time', DateTime.now().millisecondsSinceEpoch);
+        });
+      }
+    }
+    if (state == AppLifecycleState.resumed) {
+      SharedPreferences.getInstance().then((prefs) async {
+        final passcodeSet = prefs.getBool('passcode_set') ?? false;
+        if (!passcodeSet) return;
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final lastActive = prefs.getInt('last_active_time') ?? now;
+        final elapsed = now - lastActive;
+        const oneHour = 60 * 60 * 1000;
+
+        final isPlaying = globalAudioHandler.player.playing;
+
+        if (elapsed > oneHour && !isPlaying) {
+          if (mounted) {
+            setState(() {
+              _showPasscode = true;
+              _isSetupFirstTime = false;
+            });
+          }
+        }
+      });
+    }
+  }
+
+  void _handleUnlock() {
+    setState(() {
+      _showPasscode = false;
+      _isSetupFirstTime = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isChecking) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF08070D),
+        body: Center(child: CircularProgressIndicator(color: Color(0xFF8B5CF6))),
+      );
+    }
+
+    if (_showPasscode) {
+      return SetupScreen(
+        key: ValueKey(_isSetupFirstTime ? 'setup' : 'entry'),
+        isSetup: _isSetupFirstTime,
+        onUnlock: _handleUnlock,
+      );
+    }
+
+    return const HomeScreen();
   }
 }
