@@ -11,8 +11,8 @@ class ApiService {
 
   // Hardcoded admin credentials for auto-login (Android + Windows).
   // Change these if your backend admin password changes, then rebuild.
-  static const String _adminUsername = "admin";
-  static const String _adminPassword = "admin";
+  static const String _adminUsername = "shriram";
+  static const String _adminPassword = "nopassword";
 
   static final ApiService _instance = ApiService._internal();
   factory ApiService() => _instance;
@@ -25,7 +25,9 @@ class ApiService {
         return handler.next(options);
       },
       onError: (DioException e, handler) async {
-        if (e.response?.statusCode == 401) {
+        // Don't retry the login endpoint itself — that would cause an infinite
+        // loop if the hardcoded credentials happen to be wrong or change.
+        if (e.response?.statusCode == 401 && !e.requestOptions.path.contains('/auth/login')) {
           // Transparently re-login and retry (Android + Windows)
           final success = await _autoLogin();
           if (success) {
@@ -55,8 +57,9 @@ class ApiService {
   Future<bool> _autoLogin() async {
     try {
       final response = await dio.post(
-        "$baseUrl/auth/login",
+        "/auth/login/form",
         data: {"username": _adminUsername, "password": _adminPassword},
+        options: Options(contentType: Headers.formUrlEncodedContentType),
       );
       token = response.data["access_token"];
       startSseConnection();
