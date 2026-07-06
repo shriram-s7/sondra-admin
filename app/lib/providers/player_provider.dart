@@ -179,16 +179,16 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     });
   }
 
-  Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName, bool internalCall = false}) async {
+  Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName, bool internalCall = false, bool forcePlay = false}) async {
     if (_isBusy && !internalCall) return;
     _isBusy = true;
     try {
-      // autoPlay is true whenever: user taps a song directly OR we are
-      // mid-track-advance (auto-next or skip). The _advancingTrack flag is
-      // set before handleNext() resolves, so we can rely on it here.
-      final autoPlay = internalCall
-          ? (_advancingTrack || state.isPlaying || globalAudioHandler.player.playing)
-          : true;
+      // autoPlay rules:
+      //  - Direct user action (internalCall=false): always play
+      //  - forcePlay=true (from handleNext/handlePrev): always play  
+      //  - Auto-advance (_advancingTrack=true): always play
+      //  - Otherwise: inherit the current playing state
+      final autoPlay = (!internalCall) || forcePlay || _advancingTrack || state.isPlaying || globalAudioHandler.player.playing;
       final isNewQueue = playlist.length != state.originalPlaylist.length ||
           playlist.asMap().entries.any((e) => state.originalPlaylist.length <= e.key || e.value["id"] != state.originalPlaylist[e.key]["id"]);
 
@@ -398,18 +398,19 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
 
   Future<void> handleNext() async {
     final now = DateTime.now();
-    if (_lastActionTime != null && 
+    if (_lastActionTime != null &&
         now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
       return;
     }
     _lastActionTime = now;
 
+    // Wait for any in-progress operation to finish, but do NOT seize _isBusy here.
+    // playSong() will seize it with internalCall=true (bypasses the busy guard).
     if (_isBusy) {
       while (_isBusy) {
         await Future.delayed(const Duration(milliseconds: 50));
       }
     }
-    _isBusy = true;
 
     try {
       if (state.currentSong == null) return;
@@ -419,65 +420,63 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         final nextSong = state.queue.first;
         final remainingQueue = List<Map<String, dynamic>>.from(state.queue)..removeAt(0);
         state = state.copyWith(queue: remainingQueue);
-        
+
         final contextResult = await _findPlaylistContextFor(nextSong);
         final plName = contextResult['name'] as String;
         final plSongs = contextResult['songs'] as List<Map<String, dynamic>>;
-        
-        await playSong(nextSong, plSongs, playlistName: plName, internalCall: true);
+
+        // forcePlay=true: user explicitly pressed Next, always play regardless of current state
+        await playSong(nextSong, plSongs, playlistName: plName, internalCall: true, forcePlay: true);
         return;
       }
 
       // RULE 2 - CURRENT PLAYLIST PLAYS THROUGH COMPLETELY
       if (state.activePlaylist.isEmpty) return;
       int idx = state.activePlaylist.indexWhere((s) => s["id"] == state.currentSong!["id"]);
-      
+
       if (idx != -1) {
         int nextIdx = idx + 1;
         if (nextIdx >= state.activePlaylist.length) {
           if (state.shuffle && state.originalPlaylist.isNotEmpty) {
-            // Shuffle mode: generate next valid shuffled playback sequence (or restart it)
             final newShuffled = List<Map<String, dynamic>>.from(state.originalPlaylist);
             _secureShuffle(newShuffled);
             if (newShuffled.length > 1 && newShuffled.first["id"] == state.currentSong!["id"]) {
-              // Swap the first song with the second to avoid immediate repeat
               final temp = newShuffled[0];
               newShuffled[0] = newShuffled[1];
               newShuffled[1] = temp;
             }
             state = state.copyWith(activePlaylist: newShuffled);
-            await playSong(newShuffled.first, state.originalPlaylist, internalCall: true);
+            await playSong(newShuffled.first, state.originalPlaylist, internalCall: true, forcePlay: true);
           } else if (state.activePlaylist.isNotEmpty) {
-            // Linear mode: loop back to the first song, looping forever
-            await playSong(state.activePlaylist[0], state.originalPlaylist, internalCall: true);
+            await playSong(state.activePlaylist[0], state.originalPlaylist, internalCall: true, forcePlay: true);
           }
         } else {
-          await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
+          await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true, forcePlay: true);
         }
       }
     } finally {
-      _isBusy = false;
+      // Do NOT touch _isBusy here — playSong() owns it for the async duration.
     }
   }
 
   Future<void> handlePrev() async {
     final now = DateTime.now();
-    if (_lastActionTime != null && 
+    if (_lastActionTime != null &&
         now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
       return;
     }
     _lastActionTime = now;
 
+    // Same as handleNext: do NOT seize _isBusy — playSong() does it.
     if (_isBusy) {
       while (_isBusy) {
         await Future.delayed(const Duration(milliseconds: 50));
       }
     }
-    _isBusy = true;
 
     try {
       if (state.activePlaylist.isEmpty || state.currentSong == null) return;
-      
+
       // Restart song if it has played past 3 seconds
       if (state.position.inSeconds > 3) {
         seek(Duration.zero);
@@ -495,10 +494,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
             prevIdx = 0;
           }
         }
-        await playSong(state.activePlaylist[prevIdx], state.originalPlaylist, internalCall: true);
+        // forcePlay=true: user explicitly pressed Prev, always play
+        await playSong(state.activePlaylist[prevIdx], state.originalPlaylist, internalCall: true, forcePlay: true);
       }
     } finally {
-      _isBusy = false;
+      // Do NOT touch _isBusy here — playSong() owns it.
     }
   }
 

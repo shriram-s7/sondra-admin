@@ -24,10 +24,21 @@ class SondraAudioHandler extends BaseAudioHandler {
   void Function(bool)? onPlayingChanged;
   double _preInterruptionVolume = 0.8;
   bool _ignoreSmtcEvents = false;
+  // When true, suppress raw playbackEventStream from overwriting playbackState.
+  // This prevents the Windows async gap from resetting playing:false mid-transition.
+  bool _suppressPlaybackEvents = false;
 
   SondraAudioHandler() {
-    // Forward playback states from just_audio to audio_service
-    _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
+    // Forward playback states from just_audio to audio_service,
+    // but only when we are NOT in the middle of a programmatic transition.
+    // The raw pipe was causing Windows to reset playing:false because
+    // playbackEventStream fires with playing=false during source loading,
+    // which overwrites the correct playing:true state after play() is called.
+    _player.playbackEventStream.listen((event) {
+      if (!_suppressPlaybackEvents) {
+        playbackState.add(_transformEvent(event));
+      }
+    });
 
     // Initialize Windows System Media Transport Controls (SMTC)
     if (kIsWeb ? false : Platform.isWindows) {
@@ -217,37 +228,45 @@ class SondraAudioHandler extends BaseAudioHandler {
         }
       }
       if (autoPlay) {
-        // Wait for the audio source to be fully loaded before calling play().
-        // This is critical on Windows: setAudioSource() returns before the
-        // Windows Media Foundation pipeline is ready. Calling play() too early
-        // silently fails and the player stays paused.
-        if (_player.processingState == ProcessingState.loading ||
-            _player.processingState == ProcessingState.buffering) {
-          await _player.processingStateStream.firstWhere(
-            (state) => state == ProcessingState.ready || state == ProcessingState.idle,
-          ).timeout(const Duration(seconds: 15));
+        // Suppress the raw playbackEventStream while we transition.
+        // Without this, just_audio_windows fires events with playing=false
+        // during the load→ready pipeline on Windows, which overwrites our
+        // manually set playing:true state before it can take effect.
+        _suppressPlaybackEvents = true;
+        try {
+          // Wait for the audio source to be fully loaded before calling play().
+          // Critical on Windows: setAudioSource() returns before the Windows
+          // Media Foundation pipeline is ready. Calling play() too early silently fails.
+          if (_player.processingState == ProcessingState.loading ||
+              _player.processingState == ProcessingState.buffering) {
+            await _player.processingStateStream.firstWhere(
+              (state) => state == ProcessingState.ready || state == ProcessingState.idle,
+            ).timeout(const Duration(seconds: 15));
+          }
+          if (_player.processingState == ProcessingState.idle) {
+            throw Exception("Audio source failed to load");
+          }
+          // Issue an explicit play() command. On Windows this MUST happen after
+          // ProcessingState.ready, otherwise the command is silently dropped.
+          await _player.play();
+          // On Windows: immediately force SMTC to Playing status.
+          if (isWindows && _smtc != null) {
+            _smtc!.setPlaybackStatus(PlaybackStatus.Playing);
+            _smtc!.setIsNextEnabled(true);
+            _smtc!.setIsPrevEnabled(true);
+            _smtc!.setIsPlayEnabled(true);
+            _smtc!.setIsPauseEnabled(true);
+          }
+          // Wait for the playing flag to confirm before releasing suppression.
+          if (!_player.playing) {
+            await _player.playingStream.firstWhere((playing) => playing)
+                .timeout(const Duration(seconds: 3), onTimeout: () => false);
+          }
+        } finally {
+          // Always push one correct state snapshot, then re-enable the stream.
+          playbackState.add(_transformEvent(_player.playbackEvent));
+          _suppressPlaybackEvents = false;
         }
-        if (_player.processingState == ProcessingState.idle) {
-          throw Exception("Audio source failed to load");
-        }
-        // Issue an explicit play() command. On Windows, this must happen AFTER
-        // the audio is in ProcessingState.ready, otherwise it is ignored.
-        await _player.play();
-        // On Windows: immediately force SMTC to Playing status so the taskbar
-        // shows the correct state regardless of any async Riverpod state lag.
-        if (isWindows && _smtc != null) {
-          _smtc!.setPlaybackStatus(PlaybackStatus.Playing);
-          _smtc!.setIsNextEnabled(true);
-          _smtc!.setIsPrevEnabled(true);
-          _smtc!.setIsPlayEnabled(true);
-          _smtc!.setIsPauseEnabled(true);
-        }
-        if (!_player.playing) {
-          // Safety: wait for playing confirmation, but don't block indefinitely.
-          await _player.playingStream.firstWhere((playing) => playing)
-              .timeout(const Duration(seconds: 3), onTimeout: () => false);
-        }
-        playbackState.add(_transformEvent(_player.playbackEvent));
         onPlayingChanged?.call(true);
       }
     } catch (e) {
