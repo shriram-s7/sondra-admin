@@ -133,10 +133,10 @@ class _SondraAppState extends State<SondraApp> {
                   if (hasInputFocus) return KeyEventResult.ignored;
 
                   final key = event.logicalKey;
-                  if (key == LogicalKeyboardKey.space || 
-                      key == LogicalKeyboardKey.mediaPlayPause ||
-                      key == LogicalKeyboardKey.mediaPlay ||
-                      key == LogicalKeyboardKey.mediaPause) {
+                  // Space bar toggles playback via keyboard. Media keys (mediaPlayPause,
+                  // mediaPlay, mediaPause, mediaTrackNext, mediaTrackPrevious) are handled
+                  // globally by SMTC/audio_service. Handling them here causes double-triggering.
+                  if (key == LogicalKeyboardKey.space) {
                     ref.read(playerProvider.notifier).togglePlay();
                     return KeyEventResult.handled;
                   }
@@ -154,14 +154,6 @@ class _SondraAppState extends State<SondraApp> {
                     ref.read(playerProvider.notifier).seek(
                       targetPos > Duration.zero ? targetPos : Duration.zero
                     );
-                    return KeyEventResult.handled;
-                  }
-                  if (key == LogicalKeyboardKey.mediaTrackNext) {
-                    ref.read(playerProvider.notifier).handleNext();
-                    return KeyEventResult.handled;
-                  }
-                  if (key == LogicalKeyboardKey.mediaTrackPrevious) {
-                    ref.read(playerProvider.notifier).handlePrev();
                     return KeyEventResult.handled;
                   }
                 }

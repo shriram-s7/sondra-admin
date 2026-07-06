@@ -255,20 +255,18 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover?v=${song["id"]}"),
       );
 
+      if (autoPlay && !kIsWeb && Platform.isWindows) {
+        _ignorePlayingFalseUntil = DateTime.now().add(const Duration(milliseconds: 4000));
+        globalAudioHandler.setSmtcPlaying(true);
+      }
+
       await globalAudioHandler.playUri(url, mediaItem, autoPlay: autoPlay)
           .timeout(const Duration(seconds: 20));
 
       state = state.copyWith(isBuffering: false);
 
       if (autoPlay) {
-        // Force the playing state TRUE immediately after playUri confirms.
-        // Also set a 2-second protection window so any delayed WMF false
-        // events from the playingStream are ignored.
         state = state.copyWith(isPlaying: true);
-        if (!kIsWeb && Platform.isWindows) {
-          _ignorePlayingFalseUntil = DateTime.now().add(const Duration(milliseconds: 2000));
-          globalAudioHandler.setSmtcPlaying(true);
-        }
       }
 
       if (startSeconds != null) {
@@ -289,6 +287,10 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     if (state.isPlaying) {
       await globalAudioHandler.pause();
     } else {
+      if (!kIsWeb && Platform.isWindows) {
+        _ignorePlayingFalseUntil = DateTime.now().add(const Duration(milliseconds: 2000));
+        globalAudioHandler.setSmtcPlaying(true);
+      }
       await globalAudioHandler.play();
     }
   }
@@ -516,6 +518,10 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       // Restart song if it has played past 3 seconds
       if (state.position.inSeconds > 3) {
         seek(Duration.zero);
+        if (!kIsWeb && Platform.isWindows) {
+          _ignorePlayingFalseUntil = DateTime.now().add(const Duration(milliseconds: 2000));
+          globalAudioHandler.setSmtcPlaying(true);
+        }
         globalAudioHandler.play();
         return;
       }

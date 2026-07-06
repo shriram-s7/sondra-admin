@@ -39,6 +39,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   int _currentIndex = 0;
   String _searchQuery = "";
   final _searchController = TextEditingController();
+  String _playlistSearchQuery = "";
+  final _playlistSearchController = TextEditingController();
   bool _isSyncingLocal = false;
   Map<String, dynamic>? _selectedPlaylistWindows;
   Map<String, dynamic>? _selectedOfflinePlaylistWindows;
@@ -225,6 +227,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final personalPlaylists = allLocalPlaylists.where((p) => p['type'] == 'personal').toList();
     final offlinePlaylists = allLocalPlaylists.where((p) => p['type'] == 'offline').toList();
 
+    final query = _playlistSearchQuery.toLowerCase().trim();
+    final filteredPersonal = query.isEmpty
+        ? personalPlaylists
+        : personalPlaylists.where((p) => (p['name'] ?? '').toString().toLowerCase().contains(query)).toList();
+    final filteredOffline = query.isEmpty
+        ? offlinePlaylists
+        : offlinePlaylists.where((p) => (p['name'] ?? '').toString().toLowerCase().contains(query)).toList();
+
     return Container(
       width: 220,
       color: const Color(0xFF111019),
@@ -251,6 +261,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   const SizedBox(height: 12),
                   const Divider(color: Colors.white10, height: 1),
                   const SizedBox(height: 12),
+
+                  // Sidebar Playlist Search
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                    child: PlaylistSearchBar(
+                      controller: _playlistSearchController,
+                      query: _playlistSearchQuery,
+                      onChanged: (val) {
+                        setState(() { _playlistSearchQuery = val; });
+                      },
+                      onClear: () {
+                        setState(() {
+                          _playlistSearchQuery = '';
+                          _playlistSearchController.clear();
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(color: Colors.white10, height: 1),
+                  const SizedBox(height: 12),
                   
                   // My Library Playlists Dropdown
                   _buildDropdownHeader(
@@ -261,14 +292,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   if (_isLibraryExpanded)
                     playlistsAsync.when(
                       data: (lists) {
-                        if (lists.isEmpty) {
+                        final filteredLists = query.isEmpty
+                            ? lists
+                            : lists.where((pl) => (pl["name"] ?? "").toString().toLowerCase().contains(query)).toList();
+                        if (filteredLists.isEmpty) {
                           return const Padding(
                             padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
-                            child: Text("No playlists", style: TextStyle(color: Colors.white30, fontSize: 12)),
+                            child: Text("No matching playlists", style: TextStyle(color: Colors.white30, fontSize: 12)),
                           );
                         }
                         return Column(
-                          children: lists.map<Widget>((pl) {
+                          children: filteredLists.map<Widget>((pl) {
                             final isSelected = _selectedPlaylistWindows != null && _selectedPlaylistWindows!["name"] == pl["name"];
                             return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
                               setState(() {
@@ -297,12 +331,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     onToggle: () => setState(() => _isPersonalExpanded = !_isPersonalExpanded),
                   ),
                   if (_isPersonalExpanded) ...[
-                    if (personalPlaylists.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
-                        child: Text("No playlists yet", style: TextStyle(color: Colors.white30, fontSize: 12)),
+                    if (filteredPersonal.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 16, top: 4, bottom: 4),
+                        child: Text(
+                          query.isEmpty ? "No playlists yet" : "No matching playlists",
+                          style: const TextStyle(color: Colors.white30, fontSize: 12),
+                        ),
                       ),
-                    ...personalPlaylists.map<Widget>((pl) {
+                    ...filteredPersonal.map<Widget>((pl) {
                       final isSelected = _selectedOfflinePlaylistWindows != null && _selectedOfflinePlaylistWindows!["id"] == pl["id"];
                       return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
                         setState(() {
@@ -322,12 +359,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     onToggle: () => setState(() => _isOfflineExpanded = !_isOfflineExpanded),
                   ),
                   if (_isOfflineExpanded) ...[
-                    if (offlinePlaylists.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
-                        child: Text("No playlists yet", style: TextStyle(color: Colors.white30, fontSize: 12)),
+                    if (filteredOffline.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 16, top: 4, bottom: 4),
+                        child: Text(
+                          query.isEmpty ? "No playlists yet" : "No matching playlists",
+                          style: const TextStyle(color: Colors.white30, fontSize: 12),
+                        ),
                       ),
-                    ...offlinePlaylists.map<Widget>((pl) {
+                    ...filteredOffline.map<Widget>((pl) {
                       final isSelected = _selectedOfflinePlaylistWindows != null && _selectedOfflinePlaylistWindows!["id"] == pl["id"];
                       return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
                         setState(() {
@@ -695,6 +735,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final personalPlaylists = allLocalPlaylists.where((p) => p['type'] == 'personal').toList();
     final offlinePlaylists = allLocalPlaylists.where((p) => p['type'] == 'offline').toList();
 
+    final query = _playlistSearchQuery.toLowerCase().trim();
+    final filteredPersonal = query.isEmpty
+        ? personalPlaylists
+        : personalPlaylists.where((p) => (p['name'] ?? '').toString().toLowerCase().contains(query)).toList();
+    final filteredOffline = query.isEmpty
+        ? offlinePlaylists
+        : offlinePlaylists.where((p) => (p['name'] ?? '').toString().toLowerCase().contains(query)).toList();
+
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -702,6 +750,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         children: [
           const Text("Playlists",
               style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          PlaylistSearchBar(
+            controller: _playlistSearchController,
+            query: _playlistSearchQuery,
+            onChanged: (val) {
+              setState(() { _playlistSearchQuery = val; });
+            },
+            onClear: () {
+              setState(() {
+                _playlistSearchQuery = '';
+                _playlistSearchController.clear();
+              });
+            },
+          ),
           const SizedBox(height: 16),
           Expanded(
             child: ListView(
@@ -719,29 +781,42 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 const SizedBox(height: 4),
                 if (playlistsAsync is AsyncData && playlistsAsync.value!.isNotEmpty)
                   ...playlistsAsync.when(
-                    data: (lists) => lists.map<Widget>((pl) {
-                      final pSongs = List<Map<String, dynamic>>.from(pl["songs"] ?? []);
-                      return _PlaylistCard(
-                        icon: Icons.cloud_rounded,
-                        iconColor: const Color(0xFFFBBF24),
-                        name: pl["name"] ?? "Unnamed",
-                        subtitle: "${pl["song_count"] ?? 0} songs",
-                        onTap: () {
-                          if (Platform.isWindows) {
-                            setState(() => _selectedPlaylistWindows = pl);
-                          } else {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => _PlaylistDetailScreen(
-                                  name: pl["name"] ?? "Playlist",
-                                  songs: pSongs,
+                    data: (lists) {
+                      final filteredLists = query.isEmpty
+                          ? lists
+                          : lists.where((pl) => (pl["name"] ?? "").toString().toLowerCase().contains(query)).toList();
+                      if (filteredLists.isEmpty) {
+                        return [
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12.0, horizontal: 8),
+                            child: Text("No matching playlists", style: TextStyle(color: Colors.white30, fontSize: 13)),
+                          )
+                        ];
+                      }
+                      return filteredLists.map<Widget>((pl) {
+                        final pSongs = List<Map<String, dynamic>>.from(pl["songs"] ?? []);
+                        return _PlaylistCard(
+                          icon: Icons.cloud_rounded,
+                          iconColor: const Color(0xFFFBBF24),
+                          name: pl["name"] ?? "Unnamed",
+                          subtitle: "${pl["song_count"] ?? 0} songs",
+                          onTap: () {
+                            if (Platform.isWindows) {
+                              setState(() => _selectedPlaylistWindows = pl);
+                            } else {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => _PlaylistDetailScreen(
+                                    name: pl["name"] ?? "Playlist",
+                                    songs: pSongs,
+                                  ),
                                 ),
-                              ),
-                            );
-                          }
-                        },
-                      );
-                    }),
+                              );
+                            }
+                          },
+                        );
+                      }).toList();
+                    },
                     loading: () => [const Center(child: CircularProgressIndicator(color: Color(0xFF8B5CF6)))],
                     error: (e, s) => [Text("Error: $e", style: const TextStyle(color: Colors.redAccent))],
                   )
@@ -768,8 +843,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                if (personalPlaylists.isNotEmpty)
-                  ...personalPlaylists.map<Widget>((pl) {
+                if (filteredPersonal.isNotEmpty)
+                  ...filteredPersonal.map<Widget>((pl) {
                     final songs = List<Map<String, dynamic>>.from(pl["songs"] ?? []);
                     return _PlaylistCard(
                       icon: Icons.playlist_play_rounded,
@@ -818,7 +893,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     );
                   })
                 else
-                  _emptyHint("Tap + to create your first personal playlist"),
+                  _emptyHint(query.isEmpty ? "Tap + to create your first personal playlist" : "No matching playlists"),
                 const SizedBox(height: 28),
                 const Divider(color: Colors.white10, height: 1),
                 const SizedBox(height: 16),
@@ -858,8 +933,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   },
                 ),
                 const SizedBox(height: 4),
-                if (offlinePlaylists.isNotEmpty)
-                  ...offlinePlaylists.map<Widget>((pl) {
+                if (filteredOffline.isNotEmpty)
+                  ...filteredOffline.map<Widget>((pl) {
                     final songs = List<Map<String, dynamic>>.from(pl["songs"] ?? []);
                     final allCompleted = songs.isNotEmpty && songs.every((s) => s['status'] == 'completed');
                     final anyDownloading = songs.any((s) => s['status'] == 'downloading');
@@ -922,7 +997,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     );
                   })
                 else
-                  _emptyHint("Tap + to create your first offline playlist"),
+                  _emptyHint(query.isEmpty ? "Tap + to create your first offline playlist" : "No matching playlists"),
               ],
             ),
           ),
@@ -1247,6 +1322,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _playlistSearchController.dispose();
     super.dispose();
   }
 }
