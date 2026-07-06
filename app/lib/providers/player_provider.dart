@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
 import '../services/api_service.dart';
 import '../services/audio_handler.dart';
 import '../services/offline_storage.dart';
+
 
 // Global audio handler instance injected in main
 late SondraAudioHandler globalAudioHandler;
@@ -86,6 +88,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   DateTime? _lastActionTime;
   Timer? _bufferingTimer;
   Timer? _bufferingSevereTimer;
+  // Protection window: ignore playing=false events from the playingStream
+  // within this period after a transition. Windows Media Foundation fires
+  // delayed false events AFTER play() succeeds, which would override the
+  // correct isPlaying=true state. This is the definitive fix.
+  DateTime? _ignorePlayingFalseUntil;
 
   // Cache for playlist context lookups so the queue path in handleNext()
   // doesn't block on 1-3 sequential network calls per transition.
@@ -169,9 +176,33 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     globalAudioHandler.onSkipToNext = () => handleNext();
     globalAudioHandler.onSkipToPrevious = () => handlePrev();
 
-    globalAudioHandler.player.playingStream.listen((playing) {
+    // onPlayingChanged is called directly from audio_handler after play()/pause()
+    // confirms its result. This bypasses the playingStream which receives
+    // delayed false events from Windows MF after transitions.
+    globalAudioHandler.onPlayingChanged = (playing) {
+      if (!playing) {
+        // Ignore false events within the protection window.
+        final until = _ignorePlayingFalseUntil;
+        if (until != null && DateTime.now().isBefore(until)) return;
+      }
       state = state.copyWith(isPlaying: playing);
-      if (Platform.isWindows) {
+      if (!kIsWeb && Platform.isWindows) {
+        if (!state.isBuffering) {
+          globalAudioHandler.setSmtcPlaying(playing);
+        }
+      }
+    };
+
+    globalAudioHandler.player.playingStream.listen((playing) {
+      // Ignore transient false events from Windows MF within the protection window.
+      // These are artifacts of the WMF pipeline firing playing=false after a
+      // new source is loaded, even AFTER play() has successfully started audio.
+      if (!playing) {
+        final until = _ignorePlayingFalseUntil;
+        if (until != null && DateTime.now().isBefore(until)) return;
+      }
+      state = state.copyWith(isPlaying: playing);
+      if (!kIsWeb && Platform.isWindows) {
         if (!state.isBuffering) {
           globalAudioHandler.setSmtcPlaying(playing);
         }
@@ -227,12 +258,17 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       await globalAudioHandler.playUri(url, mediaItem, autoPlay: autoPlay)
           .timeout(const Duration(seconds: 20));
 
-      state = state.copyWith(
-        isBuffering: false,
-      );
+      state = state.copyWith(isBuffering: false);
 
-      if (Platform.isWindows) {
-        globalAudioHandler.setSmtcPlaying(autoPlay || state.isPlaying || globalAudioHandler.player.playing);
+      if (autoPlay) {
+        // Force the playing state TRUE immediately after playUri confirms.
+        // Also set a 2-second protection window so any delayed WMF false
+        // events from the playingStream are ignored.
+        state = state.copyWith(isPlaying: true);
+        if (!kIsWeb && Platform.isWindows) {
+          _ignorePlayingFalseUntil = DateTime.now().add(const Duration(milliseconds: 2000));
+          globalAudioHandler.setSmtcPlaying(true);
+        }
       }
 
       if (startSeconds != null) {

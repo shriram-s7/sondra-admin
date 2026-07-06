@@ -177,12 +177,18 @@ class SondraAudioHandler extends BaseAudioHandler {
 
   Future<void> playUri(String uri, MediaItem item, {bool autoPlay = true}) async {
     final isWindows = !kIsWeb && Platform.isWindows;
+    // Block SMTC button events (pause, next, prev from taskbar/earbuds)
+    // during the entire transition to prevent them from interfering.
     if (isWindows) {
       _ignoreSmtcEvents = true;
     }
+    // Block raw playbackEventStream from writing playing=false to playbackState
+    // during the transition. Windows MF fires delayed false events that
+    // override our play() call. We suppress ALL events and push one clean
+    // snapshot only after play() is confirmed.
+    _suppressPlaybackEvents = true;
     try {
       await ensureInitialized();
-
       mediaItem.add(item);
 
       if (_smtc != null) {
@@ -193,24 +199,18 @@ class SondraAudioHandler extends BaseAudioHandler {
         }
       }
 
-      final isLocalFilePath = uri.startsWith('/') || 
+      final isLocalFilePath = uri.startsWith('/') ||
           (uri.length > 2 && uri[1] == ':');
-      
+
       if (!kIsWeb && Platform.isAndroid) {
         if (isLocalFilePath) {
-          await _player.setAudioSource(
-            AudioSource.file(uri, tag: item),
-          );
+          await _player.setAudioSource(AudioSource.file(uri, tag: item));
         } else {
           final parsedUri = Uri.parse(uri);
           if (parsedUri.scheme == 'file') {
-            await _player.setAudioSource(
-              AudioSource.file(parsedUri.toFilePath(), tag: item),
-            );
+            await _player.setAudioSource(AudioSource.file(parsedUri.toFilePath(), tag: item));
           } else {
-            await _player.setAudioSource(
-              AudioSource.uri(parsedUri, tag: item),
-            );
+            await _player.setAudioSource(AudioSource.uri(parsedUri, tag: item));
           }
         }
       } else {
@@ -221,62 +221,67 @@ class SondraAudioHandler extends BaseAudioHandler {
           if (parsedUri.scheme == 'file') {
             await _player.setAudioSource(AudioSource.file(parsedUri.toFilePath()));
           } else {
-            await _player.setAudioSource(
-              AudioSource.uri(parsedUri, tag: item),
-            );
+            await _player.setAudioSource(AudioSource.uri(parsedUri, tag: item));
           }
         }
       }
+
       if (autoPlay) {
-        // Suppress the raw playbackEventStream while we transition.
-        // Without this, just_audio_windows fires events with playing=false
-        // during the load→ready pipeline on Windows, which overwrites our
-        // manually set playing:true state before it can take effect.
-        _suppressPlaybackEvents = true;
-        try {
-          // Wait for the audio source to be fully loaded before calling play().
-          // Critical on Windows: setAudioSource() returns before the Windows
-          // Media Foundation pipeline is ready. Calling play() too early silently fails.
-          if (_player.processingState == ProcessingState.loading ||
-              _player.processingState == ProcessingState.buffering) {
-            await _player.processingStateStream.firstWhere(
-              (state) => state == ProcessingState.ready || state == ProcessingState.idle,
-            ).timeout(const Duration(seconds: 15));
-          }
-          if (_player.processingState == ProcessingState.idle) {
-            throw Exception("Audio source failed to load");
-          }
-          // Issue an explicit play() command. On Windows this MUST happen after
-          // ProcessingState.ready, otherwise the command is silently dropped.
-          await _player.play();
-          // On Windows: immediately force SMTC to Playing status.
-          if (isWindows && _smtc != null) {
-            _smtc!.setPlaybackStatus(PlaybackStatus.Playing);
-            _smtc!.setIsNextEnabled(true);
-            _smtc!.setIsPrevEnabled(true);
-            _smtc!.setIsPlayEnabled(true);
-            _smtc!.setIsPauseEnabled(true);
-          }
-          // Wait for the playing flag to confirm before releasing suppression.
-          if (!_player.playing) {
-            await _player.playingStream.firstWhere((playing) => playing)
-                .timeout(const Duration(seconds: 3), onTimeout: () => false);
-          }
-        } finally {
-          // Always push one correct state snapshot, then re-enable the stream.
-          playbackState.add(_transformEvent(_player.playbackEvent));
-          _suppressPlaybackEvents = false;
+        // Wait for ProcessingState.ready before calling play().
+        // On Windows, setAudioSource() may return before WMF is ready.
+        if (_player.processingState == ProcessingState.loading ||
+            _player.processingState == ProcessingState.buffering) {
+          await _player.processingStateStream.firstWhere(
+            (s) => s == ProcessingState.ready || s == ProcessingState.idle,
+          ).timeout(const Duration(seconds: 15));
         }
+        if (_player.processingState == ProcessingState.idle) {
+          throw Exception("Audio source failed to load (idle state after setAudioSource)");
+        }
+
+        // Call play(). On Windows this MUST be after ProcessingState.ready.
+        await _player.play();
+
+        // Wait up to 3 seconds for playing=true confirmation.
+        if (!_player.playing) {
+          await _player.playingStream
+              .firstWhere((p) => p)
+              .timeout(const Duration(seconds: 3), onTimeout: () => false);
+        }
+
+        // Force SMTC to Playing immediately — do not wait for stream events.
+        if (isWindows && _smtc != null) {
+          _smtc!.setPlaybackStatus(PlaybackStatus.Playing);
+          _smtc!.setIsNextEnabled(true);
+          _smtc!.setIsPrevEnabled(true);
+          _smtc!.setIsPlayEnabled(true);
+          _smtc!.setIsPauseEnabled(true);
+        }
+
+        // Push one authoritative state snapshot BEFORE releasing suppression.
+        // This is the only event player_provider's playbackState stream sees
+        // for this entire transition.
+        playbackState.add(_transformEvent(_player.playbackEvent));
+
+        // Notify player_provider via callback (bypasses the playingStream
+        // listener which may still receive delayed false events from WMF).
         onPlayingChanged?.call(true);
+      } else {
+        // autoPlay=false: just push current state
+        playbackState.add(_transformEvent(_player.playbackEvent));
       }
     } catch (e) {
-      print("Audio player setSource error: $e");
+      print("Audio player playUri error: $e");
       playbackState.add(playbackState.value.copyWith(
         errorMessage: e.toString(),
       ));
     } finally {
+      // Always release the event suppression.
+      _suppressPlaybackEvents = false;
+      // Release SMTC event ignore after a short window.
+      // 1500ms covers any delayed WMF pause events from earbuds/taskbar.
       if (isWindows) {
-        Future.delayed(const Duration(milliseconds: 500), () {
+        Future.delayed(const Duration(milliseconds: 1500), () {
           _ignoreSmtcEvents = false;
         });
       }
