@@ -61,6 +61,12 @@ def sync_library_logic():
         root_id = os.getenv("GDRIVE_ROOT_FOLDER_ID")
         if not root_id:
             print("Sync Error: GDRIVE_ROOT_FOLDER_ID environment variable is missing.")
+            sync_logs.append({
+                "timestamp": datetime.utcnow().isoformat(),
+                "songs_added": 0,
+                "songs_removed": 0,
+                "errors": "GDRIVE_ROOT_FOLDER_ID not configured"
+            })
             return
 
         # 1. Fetch playlist folders inside Root Folder from Drive
@@ -143,7 +149,6 @@ def sync_library_logic():
         print("Sync completed successfully.")
 
     except HttpError as e:
-        sync_manager.set_syncing(False)
         err_msg = "Google Drive API quota exceeded. Skipping sync." if (e.resp.status in [403, 429] and any(kw in str(e).lower() for kw in ["quota", "rate", "limit", "exhausted", "exceeded"])) else f"Sync failed with Google HTTP error: {e}"
         print(f"WARNING: {err_msg}" if "quota" in err_msg.lower() else err_msg)
         
@@ -157,7 +162,6 @@ def sync_library_logic():
             sync_logs.pop(0)
             
     except Exception as e:
-        sync_manager.set_syncing(False)
         err_msg = f"Sync failed with error: {e}"
         print(err_msg)
         
@@ -171,6 +175,10 @@ def sync_library_logic():
             sync_logs.pop(0)
             
     finally:
+        # CRITICAL: Always release the sync lock, no matter what happened.
+        # Without this, any uncaught exception or early return permanently
+        # locks the sync and every future attempt returns 409 Conflict.
+        sync_manager.set_syncing(False)
         db.close()
 
 
