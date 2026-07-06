@@ -284,6 +284,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
 
   Future<void> togglePlay() async {
     if (state.currentSong == null) return;
+    _ignorePlayingFalseUntil = null; // Clear protection on manual user action
     if (state.isPlaying) {
       await globalAudioHandler.pause();
     } else {
@@ -441,6 +442,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       return;
     }
     _lastActionTime = now;
+    _ignorePlayingFalseUntil = null; // Clear protection on manual user action
 
     // Wait for any in-progress operation to finish, but do NOT seize _isBusy here.
     // playSong() will seize it with internalCall=true (bypasses the busy guard).
@@ -504,6 +506,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       return;
     }
     _lastActionTime = now;
+    _ignorePlayingFalseUntil = null; // Clear protection on manual user action
 
     // Same as handleNext: do NOT seize _isBusy — playSong() does it.
     if (_isBusy) {

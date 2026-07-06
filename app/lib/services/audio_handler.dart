@@ -227,6 +227,14 @@ class SondraAudioHandler extends BaseAudioHandler {
       }
 
       if (autoPlay) {
+        if (isWindows) {
+          // On Windows, setAudioSource() returns immediately before WMF has transitioned
+          // to loading/opening state on the Dart side. We wait a brief moment (150ms)
+          // to allow the asynchronous state broadcast to reach Dart so the loading/buffering
+          // checks below are not skipped.
+          await Future.delayed(const Duration(milliseconds: 150));
+        }
+
         // Wait for ProcessingState.ready before calling play().
         // On Windows, setAudioSource() may return before WMF is ready.
         if (_player.processingState == ProcessingState.loading ||
@@ -247,6 +255,16 @@ class SondraAudioHandler extends BaseAudioHandler {
           await _player.playingStream
               .firstWhere((p) => p)
               .timeout(const Duration(seconds: 3), onTimeout: () => false);
+        }
+
+        // Windows play safety check: if the play command was ignored by WMF
+        // during transition, wait a tiny bit (100ms) and retry play().
+        if (isWindows && !_player.playing) {
+          await Future.delayed(const Duration(milliseconds: 100));
+          if (!_player.playing) {
+            print("[Windows Audio Handler] Safety retry play() called");
+            _player.play();
+          }
         }
 
         // Force SMTC to Playing immediately — do not wait for stream events.
