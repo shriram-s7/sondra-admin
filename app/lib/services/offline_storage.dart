@@ -37,16 +37,18 @@ class OfflineStorage {
 
   Future<String> get downloadsDir async {
     try {
-      final dir = await getApplicationSupportDirectory();
+      final dir = await getApplicationDocumentsDirectory();
+      print("Resolved getApplicationDocumentsDirectory() path: ${dir.path}");
       final dl = Directory(p.join(dir.path, 'sondra_downloads'));
       if (!await dl.exists()) {
         await dl.create(recursive: true);
       }
       return dl.path;
     } catch (e) {
-      print("Failed to use application support directory for downloads, using temporary directory: $e");
-      final tempDir = await getTemporaryDirectory();
-      final dl = Directory(p.join(tempDir.path, 'sondra_downloads'));
+      print("Failed to use application documents directory for downloads: $e");
+      final fallbackDir = await getApplicationDocumentsDirectory();
+      print("Resolved fallback getApplicationDocumentsDirectory() path: ${fallbackDir.path}");
+      final dl = Directory(p.join(fallbackDir.path, 'sondra_downloads'));
       if (!await dl.exists()) {
         await dl.create(recursive: true);
       }
@@ -114,6 +116,18 @@ class OfflineStorage {
     };
   }
 
+  String getSongDownloadStatus(int songId) {
+    for (final pl in _playlists) {
+      final songs = List<Map<String, dynamic>>.from(pl['songs'] ?? []);
+      for (final s in songs) {
+        if (s['song_id'] == songId) {
+          return s['status'] ?? 'notDownloaded';
+        }
+      }
+    }
+    return 'notDownloaded';
+  }
+
   Future<void> addSongsToPlaylist(int playlistId, List<Map<String, dynamic>> songs) async {
     final idx = _playlists.indexWhere((p) => p['id'] == playlistId);
     if (idx == -1) return;
@@ -162,13 +176,65 @@ class OfflineStorage {
     await _save();
   }
 
-  Future<void> deleteSong(int playlistId, int songEntryId) async {
-    final plIdx = _playlists.indexWhere((p) => p['id'] == playlistId);
+  Future<void> deleteSong(int playlistId, int targetId) async {
+    final file = await _playlistsFile;
+    if (!await file.exists()) return;
+    final content = await file.readAsString();
+    if (content.isEmpty) return;
+
+    // 1. Load the playlist JSON
+    final List<dynamic> playlistsJson = jsonDecode(content);
+
+    // 2. Find the target playlist and remove only the specific song by song_id or id
+    final plIdx = playlistsJson.indexWhere((p) => p['id'] == playlistId);
     if (plIdx == -1) return;
-    final songs = List<Map<String, dynamic>>.from(_playlists[plIdx]['songs'] ?? []);
-    songs.removeWhere((s) => s['id'] == songEntryId);
-    _playlists[plIdx]['songs'] = songs;
-    await _save();
+
+    final songs = List<Map<String, dynamic>>.from(playlistsJson[plIdx]['songs'] ?? []);
+    final initialLength = songs.length;
+
+    // Find the song entry to get its song_id
+    Map<String, dynamic>? songEntry;
+    for (final s in songs) {
+      if (s['song_id'] == targetId || s['id'] == targetId) {
+        songEntry = s;
+        break;
+      }
+    }
+    if (songEntry != null) {
+      final songId = songEntry['song_id'] ?? targetId;
+      final dlDir = await downloadsDir;
+      final localFile = File(p.join(dlDir, '$songId.mp3'));
+      if (await localFile.exists()) {
+        await localFile.delete();
+        if (await localFile.exists()) {
+          throw Exception("Failed to delete local audio file for song $songId");
+        }
+      }
+    }
+
+    songs.removeWhere((s) => s['song_id'] == targetId || s['id'] == targetId);
+
+    // 3. Write back the modified playlist without touching others
+    playlistsJson[plIdx]['songs'] = songs;
+    await file.writeAsString(jsonEncode(playlistsJson));
+
+    // 4. Verification step
+    final verifyContent = await file.readAsString();
+    final List<dynamic> verifyList = jsonDecode(verifyContent);
+    final verifyPl = verifyList.firstWhere((p) => p['id'] == playlistId, orElse: () => null);
+    if (verifyPl == null) {
+      throw Exception("Verification failed: Playlist no longer exists");
+    }
+    final verifySongs = List<dynamic>.from(verifyPl['songs'] ?? []);
+    if (verifySongs.length != initialLength - 1) {
+      throw Exception("Verification failed: expected ${initialLength - 1} songs, but found ${verifySongs.length}");
+    }
+    if (verifySongs.any((s) => s['song_id'] == targetId || s['id'] == targetId)) {
+      throw Exception("Verification failed: target song was not removed");
+    }
+
+    // 5. Keep the in-memory array cache in sync
+    _playlists = List<Map<String, dynamic>>.from(playlistsJson);
   }
 
   Future<void> reorderSong(int playlistId, int fromIndex, int toIndex) async {

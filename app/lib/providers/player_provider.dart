@@ -82,7 +82,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   StreamSubscription? _durSub;
   StreamSubscription? _stateSub;
   bool _isBusy = false;
-  bool _pendingPlaybackStart = false;
+  bool _advancingTrack = false;
   DateTime? _lastActionTime;
   Timer? _bufferingTimer;
   Timer? _bufferingSevereTimer;
@@ -106,23 +106,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     });
 
     _stateSub = globalAudioHandler.player.playerStateStream.listen((pState) {
-      if (_isBusy) return;
-
-      // When a song just started playing, ignore the first stale "playing: false"
-      // event that was queued during the transition. Without this the state stream
-      // overwrites the optimistic isPlaying:true set in playSong(), causing a
-      // visible "paused" flash on Bluetooth earbud skips.
-      if (_pendingPlaybackStart) {
-        _pendingPlaybackStart = false;
-        if (!pState.playing && state.isPlaying) return;
-      }
-
       final wasBuffering = state.isBuffering;
       final nowBuffering = pState.processingState == ProcessingState.buffering ||
                            pState.processingState == ProcessingState.loading;
 
       state = state.copyWith(
-        isPlaying: pState.playing,
         isBuffering: nowBuffering,
       );
 
@@ -159,7 +147,13 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
           seek(Duration.zero);
           globalAudioHandler.play();
         } else {
-          handleNext();
+          if (_advancingTrack) return;
+          _advancingTrack = true;
+          try {
+            handleNext();
+          } finally {
+            _advancingTrack = false;
+          }
         }
       }
     });
@@ -173,57 +167,47 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
 
     globalAudioHandler.onSkipToNext = () => handleNext();
     globalAudioHandler.onSkipToPrevious = () => handlePrev();
+
+    globalAudioHandler.player.playingStream.listen((playing) {
+      state = state.copyWith(isPlaying: playing);
+      if (Platform.isWindows) {
+        if (!state.isBuffering) {
+          globalAudioHandler.setSmtcPlaying(playing);
+        }
+      }
+    });
   }
 
   Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName, bool internalCall = false}) async {
     if (_isBusy && !internalCall) return;
     _isBusy = true;
     try {
-      // 1. setAudioSource() handles internal source replacement - no stop/seek needed.
-      //    Removing redundant stop+seek saves ~50-150ms per transition.
-      // 2. Identify if it is a new queue or transition within the same queue
-      bool isNewQueue = false;
-      if (state.originalPlaylist.length != playlist.length) {
-        isNewQueue = true;
-      } else {
-        for (int i = 0; i < playlist.length; i++) {
-          if (state.originalPlaylist[i]["id"] != playlist[i]["id"]) {
-            isNewQueue = true;
-            break;
-          }
-        }
-      }
+      final autoPlay = internalCall ? (state.isPlaying || _advancingTrack || globalAudioHandler.player.playing) : true;
+      final isNewQueue = playlist.length != state.originalPlaylist.length ||
+          playlist.asMap().entries.any((e) => state.originalPlaylist.length <= e.key || e.value["id"] != state.originalPlaylist[e.key]["id"]);
 
-      List<Map<String, dynamic>> newOriginal = isNewQueue ? playlist : state.originalPlaylist;
       List<Map<String, dynamic>> newActive = isNewQueue ? List.from(playlist) : state.activePlaylist;
-
-      // Apply active shuffle to new queue immediately if turned on
       if (isNewQueue && state.shuffle) {
         _secureShuffle(newActive);
         newActive.removeWhere((s) => s["id"] == song["id"]);
         newActive.insert(0, song);
       }
 
-      // CHANGE 6: Set playlist/buffering state BEFORE load but do NOT set currentSong yet.
-      // currentSong is updated AFTER playUri() succeeds so the banner always matches
-      // the song that is actually playing, not a song that is still loading.
-      final resolvedPlaylistName = playlistName ?? (isNewQueue ? "Song Pool" : state.activePlaylistName);
       state = state.copyWith(
-        originalPlaylist: newOriginal,
+        originalPlaylist: isNewQueue ? playlist : state.originalPlaylist,
         activePlaylist: newActive,
-        activePlaylistName: resolvedPlaylistName,
+        activePlaylistName: playlistName ?? (isNewQueue ? "Song Pool" : state.activePlaylistName),
         position: startSeconds != null ? Duration(seconds: startSeconds) : Duration.zero,
+        currentSong: song,
         isBuffering: true,
       );
 
-      // 3. INSTANT PLAYBACK: Use local file if downloaded, otherwise stream
-      String directUrl;
-      final localPath = song["local_file_path"];
-      if (localPath != null && await File(localPath).exists()) {
-        directUrl = localPath;
-      } else {
-        directUrl = "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
-      }
+      final dlDir = await OfflineStorage().downloadsDir;
+      final localFile = File('$dlDir/${song["id"]}.mp3');
+      final localExists = await localFile.exists() && await localFile.length() > 0;
+      final url = localExists
+          ? localFile.path
+          : "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
 
       final mediaItem = MediaItem(
         id: song["id"].toString(),
@@ -234,63 +218,24 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover?v=${song["id"]}"),
       );
 
-      // Start warming the connection for the song after [song] NOW, before
-      // playUri() even begins, so by the time the next transition fires the
-      // backend proxy/Google-Drive fetch is already warmed. The early call is
-      // sufficient; the Range request is idempotent so a second call is waste.
-      _warmNextSong(currentSong: song);
+      await globalAudioHandler.playUri(url, mediaItem, autoPlay: autoPlay)
+          .timeout(const Duration(seconds: 20));
 
-      try {
-        await globalAudioHandler.playUri(directUrl, mediaItem);
+      state = state.copyWith(
+        isBuffering: false,
+      );
 
-        // Ensure the player is actually playing (fixes Bluetooth earbud paused-after-skip bug)
-        if (!globalAudioHandler.player.playing) {
-          await globalAudioHandler.player.play();
-        }
+      if (Platform.isWindows) {
+        globalAudioHandler.setSmtcPlaying(autoPlay || state.isPlaying || globalAudioHandler.player.playing);
+      }
 
-        // CHANGE 6: Only now that playUri() has succeeded do we update the banner song.
-        _pendingPlaybackStart = true;
-        state = state.copyWith(
-          currentSong: song,
-          isBuffering: false,
-          isPlaying: true,
-        );
-
-        if (startSeconds != null) {
-          await globalAudioHandler.seek(Duration(seconds: startSeconds));
-        }
-      } catch (e) {
-        print("Error loading song in provider: $e");
-        // Retry up to 3 times with 1.5s delay before skipping (Improvement 1)
-        bool retrySuccess = false;
-        for (int attempt = 1; attempt <= 3; attempt++) {
-          await Future.delayed(const Duration(milliseconds: 1500));
-          state = state.copyWith(
-            isBuffering: true,
-            bufferingMessage: "Reconnecting... (attempt $attempt/3)",
-          );
-          try {
-            await globalAudioHandler.playUri(directUrl, mediaItem);
-            retrySuccess = true;
-            break;
-          } catch (retryErr) {
-            print("Retry $attempt/3 failed: $retryErr");
-          }
-        }
-        if (retrySuccess) {
-          _pendingPlaybackStart = true;
-          state = state.copyWith(
-            currentSong: song,
-            isBuffering: false,
-            isPlaying: true,
-            bufferingMessage: null,
-          );
-          if (startSeconds != null) {
-            await globalAudioHandler.seek(Duration(seconds: startSeconds));
-          }
-        } else {
-          handleNext();
-        }
+      if (startSeconds != null) {
+        await globalAudioHandler.seek(Duration(seconds: startSeconds));
+      }
+    } catch (e) {
+      state = state.copyWith(isBuffering: false, bufferingMessage: null);
+      if (state.currentSong?["id"] == song["id"]) {
+        state = state.copyWith(currentSong: null);
       }
     } finally {
       _isBusy = false;
@@ -454,12 +399,9 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     _lastActionTime = now;
 
     if (_isBusy) {
-      // Don't drop the command — wait briefly for the current transition to finish
-      for (int i = 0; i < 20; i++) {
+      while (_isBusy) {
         await Future.delayed(const Duration(milliseconds: 50));
-        if (!_isBusy) break;
       }
-      if (_isBusy) return;
     }
     _isBusy = true;
 
@@ -521,11 +463,9 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     _lastActionTime = now;
 
     if (_isBusy) {
-      for (int i = 0; i < 20; i++) {
+      while (_isBusy) {
         await Future.delayed(const Duration(milliseconds: 50));
-        if (!_isBusy) break;
       }
-      if (_isBusy) return;
     }
     _isBusy = true;
 
@@ -604,39 +544,6 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       playlistName: state.activePlaylistName,
       internalCall: true,
     );
-  }
-
-  /// Warms up the streaming connection for the song that comes after [currentSong]
-  /// in the active playlist. This is called early during playSong() so the CDN/
-  /// proxy connection is already warmed by the time the next transition occurs.
-  void _warmNextSong({Map<String, dynamic>? currentSong}) {
-    final song = currentSong ?? state.currentSong;
-    if (song == null) return;
-    unawaited(_warmNextSongAsync(song));
-  }
-
-  Future<void> _warmNextSongAsync(Map<String, dynamic> song) async {
-    Map<String, dynamic>? nextSong;
-    if (state.queue.isNotEmpty) {
-      nextSong = state.queue.first;
-    } else if (state.activePlaylist.isNotEmpty) {
-      final idx = state.activePlaylist.indexWhere((s) => s["id"] == song["id"]);
-      if (idx != -1 && idx + 1 < state.activePlaylist.length) {
-        nextSong = state.activePlaylist[idx + 1];
-      } else if (state.repeat == "all" && state.activePlaylist.isNotEmpty) {
-        nextSong = state.activePlaylist[0];
-      }
-    }
-    if (nextSong == null) return;
-    try {
-      final localPath = nextSong["local_file_path"];
-      if (localPath != null && await File(localPath).exists()) return;
-      final url = "${_api.baseUrl}/api/stream/${nextSong["id"]}/proxy?token=${_api.token}";
-      final request = await HttpClient().getUrl(Uri.parse(url));
-      request.headers.set("Range", "bytes=0-131072");
-      final response = await request.close();
-      await response.drain();
-    } catch (_) {}
   }
 
   @override

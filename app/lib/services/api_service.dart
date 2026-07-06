@@ -71,11 +71,6 @@ class ApiService {
     }
   }
 
-  /// Kept for API compatibility — both platforms use _autoLogin().
-  Future<bool> login(String username, String password) async {
-    return _autoLogin();
-  }
-
   Future<void> logout() async {
     token = null;
     sseSubscription?.cancel();
@@ -128,11 +123,6 @@ class ApiService {
     return res.data;
   }
 
-  Future<List<dynamic>> getSongsSearch(String query) async {
-    final res = await dio.get("/api/songs/search", queryParameters: {"q": query});
-    return res.data;
-  }
-
   Future<List<dynamic>> getPlaylists() async {
     final res = await dio.get("/api/playlists");
     return res.data;
@@ -143,21 +133,11 @@ class ApiService {
     return res.data;
   }
 
-  Future<List<dynamic>> getHistoryContinue() async {
-    final res = await dio.get("/api/history/continue");
-    return res.data;
-  }
-
   Future<void> logHistory(int songId, int positionSeconds) async {
     await dio.post("/api/history", data: {
       "song_id": songId,
       "position_seconds": positionSeconds,
     });
-  }
-
-  Future<String> getDirectStreamUrl(int songId) async {
-    final res = await dio.get("/api/stream/$songId");
-    return res.data["stream_url"];
   }
 
   Future<String> getDownloadUrl(int songId) async {

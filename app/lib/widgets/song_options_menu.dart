@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/player_provider.dart';
+import '../providers/downloads_provider.dart';
 import '../services/offline_storage.dart';
 import '../services/download_manager.dart';
 
@@ -98,6 +99,48 @@ class SongOptionsButton extends ConsumerWidget {
   }
 
   List<PopupMenuEntry<void>> _buildMenuItems(BuildContext context, WidgetRef ref, {required bool isWindows}) {
+    final playlist = playlistId != null ? OfflineStorage().getPlaylist(playlistId!) : null;
+    final isOfflinePlaylist = playlist != null && playlist['type'] == 'offline';
+
+    if (isOfflinePlaylist) {
+      final songId = song['id'] as int;
+      return [
+        _popupItem(
+          icon: Icons.play_arrow_rounded,
+          title: "Play Now",
+          onTap: () {
+            ref.read(playerProvider.notifier).playSong(song, [song]);
+          },
+        ),
+        _popupItem(
+          icon: Icons.playlist_play_rounded,
+          title: "Play Next",
+          onTap: () {
+            ref.read(playerProvider.notifier).playNext(song);
+          },
+        ),
+        _popupItem(
+          icon: Icons.queue_music_rounded,
+          title: "Add to Queue",
+          onTap: () {
+            ref.read(playerProvider.notifier).addToQueue(song);
+          },
+        ),
+        _popupItem(
+          icon: Icons.playlist_remove_rounded,
+          title: "Remove from Offline Playlist",
+          color: Colors.redAccent,
+          onTap: () async {
+            await OfflineStorage().deleteSong(playlistId!, songId);
+            ref.read(downloadsProvider.notifier).refresh();
+            if (onPlaylistChanged != null) {
+              onPlaylistChanged!();
+            }
+          },
+        ),
+      ];
+    }
+
     return [
       _popupItem(
         icon: Icons.play_arrow_rounded,
@@ -134,24 +177,10 @@ class SongOptionsButton extends ConsumerWidget {
         title: "Download for Offline",
         onTap: () {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showPlaylistSelectionDialog(context, type: 'offline');
+            _showOfflinePlaylistBottomSheet(context, ref);
           });
         },
       ),
-      if (song['local_file_path'] != null && (song['local_file_path'] as String).isNotEmpty)
-        _popupItem(
-          icon: Icons.delete_outline_rounded,
-          title: "Remove Local Download",
-          color: Colors.redAccent,
-          onTap: () async {
-            final songId = song['id'] as int;
-            await DownloadManager().deleteDownloadedFile(songId);
-            await OfflineStorage().removeSongDownload(songId);
-            if (onPlaylistChanged != null) {
-              onPlaylistChanged!();
-            }
-          },
-        ),
       if (inQueue && queueIndex != null)
         _popupItem(
           icon: Icons.remove_circle_outline_rounded,
@@ -159,18 +188,6 @@ class SongOptionsButton extends ConsumerWidget {
           color: Colors.redAccent,
           onTap: () {
             ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
-          },
-        ),
-      if (playlistId != null && songEntryId != null)
-        _popupItem(
-          icon: Icons.playlist_remove_rounded,
-          title: "Remove from Playlist",
-          color: Colors.redAccent,
-          onTap: () async {
-            await OfflineStorage().deleteSong(playlistId!, songEntryId!);
-            if (onPlaylistChanged != null) {
-              onPlaylistChanged!();
-            }
           },
         ),
     ];
@@ -203,6 +220,9 @@ class SongOptionsButton extends ConsumerWidget {
   }
 
   void _showAndroidBottomSheet(BuildContext context, WidgetRef ref) {
+    final playlist = playlistId != null ? OfflineStorage().getPlaylist(playlistId!) : null;
+    final isOfflinePlaylist = playlist != null && playlist['type'] == 'offline';
+
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF111019),
@@ -243,84 +263,97 @@ class SongOptionsButton extends ConsumerWidget {
                 ),
               ),
               const Divider(color: Colors.white10),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.play_arrow_rounded,
-                title: "Play Now",
-                onTap: () {
-                  ref.read(playerProvider.notifier).playSong(song, [song]);
-                },
-              ),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.playlist_play_rounded,
-                title: "Play Next",
-                onTap: () {
-                  ref.read(playerProvider.notifier).playNext(song);
-                },
-              ),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.queue_music_rounded,
-                title: "Add to Queue",
-                onTap: () {
-                  ref.read(playerProvider.notifier).addToQueue(song);
-                },
-              ),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.playlist_add_rounded,
-                title: "Add to Personal Playlist",
-                onTap: () {
-                  _showPlaylistSelectionDialog(context, type: 'personal');
-                },
-              ),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.download_for_offline_rounded,
-                title: "Download for Offline",
-                onTap: () {
-                  _showPlaylistSelectionDialog(context, type: 'offline');
-                },
-              ),
-              if (song['local_file_path'] != null && (song['local_file_path'] as String).isNotEmpty)
+              if (isOfflinePlaylist) ...[
                 _bottomSheetItem(
                   context: ctx,
-                  icon: Icons.delete_outline_rounded,
-                  title: "Remove Local Download",
-                  color: Colors.redAccent,
-                  onTap: () async {
-                    final songId = song['id'] as int;
-                    await DownloadManager().deleteDownloadedFile(songId);
-                    await OfflineStorage().removeSongDownload(songId);
-                    if (onPlaylistChanged != null) {
-                      onPlaylistChanged!();
-                    }
-                  },
-                ),
-              if (inQueue && queueIndex != null)
-                _bottomSheetItem(
-                  context: ctx,
-                  icon: Icons.remove_circle_outline_rounded,
-                  title: "Remove from Queue",
-                  color: Colors.redAccent,
+                  icon: Icons.play_arrow_rounded,
+                  title: "Play Now",
                   onTap: () {
-                    ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
+                    ref.read(playerProvider.notifier).playSong(song, [song]);
                   },
                 ),
-              if (playlistId != null && songEntryId != null)
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.playlist_play_rounded,
+                  title: "Play Next",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).playNext(song);
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.queue_music_rounded,
+                  title: "Add to Queue",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).addToQueue(song);
+                  },
+                ),
                 _bottomSheetItem(
                   context: ctx,
                   icon: Icons.playlist_remove_rounded,
-                  title: "Remove from Playlist",
+                  title: "Remove from Offline Playlist",
                   color: Colors.redAccent,
                   onTap: () async {
-                    await OfflineStorage().deleteSong(playlistId!, songEntryId!);
+                    final songId = song['id'] as int;
+                    await OfflineStorage().deleteSong(playlistId!, songId);
+                    ref.read(downloadsProvider.notifier).refresh();
                     if (onPlaylistChanged != null) {
                       onPlaylistChanged!();
                     }
                   },
                 ),
+              ] else ...[
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.play_arrow_rounded,
+                  title: "Play Now",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).playSong(song, [song]);
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.playlist_play_rounded,
+                  title: "Play Next",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).playNext(song);
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.queue_music_rounded,
+                  title: "Add to Queue",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).addToQueue(song);
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.playlist_add_rounded,
+                  title: "Add to Personal Playlist",
+                  onTap: () {
+                    _showPlaylistSelectionDialog(context, type: 'personal');
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.download_for_offline_rounded,
+                  title: "Download for Offline",
+                  onTap: () {
+                    _showOfflinePlaylistBottomSheet(context, ref);
+                  },
+                ),
+                if (inQueue && queueIndex != null)
+                  _bottomSheetItem(
+                    context: ctx,
+                    icon: Icons.remove_circle_outline_rounded,
+                    title: "Remove from Queue",
+                    color: Colors.redAccent,
+                    onTap: () {
+                      ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
+                    },
+                  ),
+              ],
               const SizedBox(height: 12),
             ],
           ),
@@ -498,6 +531,158 @@ class SongOptionsButton extends ConsumerWidget {
           backgroundColor: const Color(0xFF8B5CF6),
         ),
       );
+    }
+  }
+
+  void _showOfflinePlaylistBottomSheet(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF111019),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
+        ),
+      ),
+      builder: (ctx) {
+        final storage = OfflineStorage();
+        final playlists = storage.getPlaylists().where((p) => p['type'] == 'offline').toList();
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text(
+                  "Save to Offline Playlist",
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const Divider(color: Colors.white10, height: 1),
+              if (playlists.isNotEmpty)
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: playlists.length,
+                    itemBuilder: (context, idx) {
+                      final pl = playlists[idx];
+                      final songsCount = (pl['songs'] as List?)?.length ?? 0;
+                      return ListTile(
+                        leading: const Icon(Icons.offline_pin_rounded, color: Color(0xFF8B5CF6)),
+                        title: Text(pl['name'] ?? 'Unnamed', style: const TextStyle(color: Colors.white)),
+                        subtitle: Text("$songsCount ${songsCount == 1 ? 'song' : 'songs'}", style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        onTap: () async {
+                          Navigator.of(ctx).pop();
+                          await _handleAddToExistingPlaylist(context, ref, pl['id'] as int, pl['name'] ?? 'Playlist');
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ListTile(
+                leading: const Icon(Icons.add_rounded, color: Color(0xFF8B5CF6)),
+                title: const Text("Create New Offline Playlist", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await _handleCreateNewOfflinePlaylist(context, ref);
+                },
+              ),
+              const Divider(color: Colors.white10, height: 1),
+              ListTile(
+                leading: const Icon(Icons.close_rounded, color: Colors.white54),
+                title: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+                onTap: () => Navigator.of(ctx).pop(),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _handleAddToExistingPlaylist(BuildContext context, WidgetRef ref, int playlistId, String playlistName) async {
+    final storage = OfflineStorage();
+    final pl = storage.getPlaylist(playlistId);
+    if (pl == null) return;
+
+    final songs = List<Map<String, dynamic>>.from(pl['songs'] ?? []);
+    final exists = songs.any((s) => s['song_id'] == song['id']);
+    
+    if (exists) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Already in $playlistName"),
+            backgroundColor: const Color(0xFF8B5CF6),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Add song to playlist immediately
+    await storage.addSongsToPlaylist(playlistId, [song]);
+
+    // Start download immediately
+    final updatedPl = storage.getPlaylist(playlistId);
+    if (updatedPl != null) {
+      final updatedSongs = List<Map<String, dynamic>>.from(updatedPl['songs'] ?? []);
+      final entry = updatedSongs.firstWhere((s) => s['song_id'] == song['id']);
+      
+      // Refresh downloads notifier to pick up the new downloading status
+      ref.read(downloadsProvider.notifier).refresh();
+      
+      // Start download background task
+      DownloadManager().downloadSong(playlistId, entry).then((_) {
+        ref.read(downloadsProvider.notifier).refresh();
+      });
+    }
+
+    if (onPlaylistChanged != null) {
+      onPlaylistChanged!();
+    }
+  }
+
+  Future<void> _handleCreateNewOfflinePlaylist(BuildContext context, WidgetRef ref) async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF111019),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("New Offline Playlist", style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: "Playlist Name",
+            hintStyle: TextStyle(color: Colors.white30),
+            focusedBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF8B5CF6)),
+            ),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text("Create", style: TextStyle(color: Color(0xFF8B5CF6))),
+          ),
+        ],
+      ),
+    );
+
+    if (name != null && name.isNotEmpty) {
+      final pl = await OfflineStorage().createPlaylist(name, type: 'offline');
+      if (context.mounted) {
+        await _handleAddToExistingPlaylist(context, ref, pl['id'] as int, name);
+      }
     }
   }
 }

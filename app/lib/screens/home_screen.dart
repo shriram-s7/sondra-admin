@@ -11,6 +11,7 @@ import 'now_playing_screen.dart';
 import 'create_offline_playlist_screen.dart';
 import 'offline_playlist_screen.dart';
 import '../widgets/song_options_menu.dart';
+import '../widgets/song_download_indicator.dart';
 import '../widgets/playlist_search_bar.dart';
 import '../widgets/playlist_header.dart';
 
@@ -25,10 +26,6 @@ final playlistsProvider = FutureProvider.autoDispose<List<dynamic>>((ref) async 
 
 final historyRecentProvider = FutureProvider.autoDispose<List<dynamic>>((ref) async {
   return await ApiService().getHistoryRecent();
-});
-
-final historyContinueProvider = FutureProvider.autoDispose<List<dynamic>>((ref) async {
-  return await ApiService().getHistoryContinue();
 });
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -48,6 +45,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _isLibraryExpanded = false;
   bool _isPersonalExpanded = false;
   bool _isOfflineExpanded = false;
+  bool _showNowPlayingPanel = false;
 
   @override
   void initState() {
@@ -61,7 +59,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ref.invalidate(songsProvider);
           ref.invalidate(playlistsProvider);
           ref.invalidate(historyRecentProvider);
-          ref.invalidate(historyContinueProvider);
         }
       }
     });
@@ -82,7 +79,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ref.invalidate(songsProvider);
             ref.invalidate(playlistsProvider);
             ref.invalidate(historyRecentProvider);
-            ref.invalidate(historyContinueProvider);
           }
         }
       } catch (e) {
@@ -99,7 +95,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final playerState = ref.watch(playerProvider);
-    final showNowPlayingWindows = ref.watch(showNowPlayingProvider);
     final hasSong = playerState.currentSong != null;
 
     return Scaffold(
@@ -110,7 +105,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             // Screen content — scrollable behind the mini-player
             Expanded(
               child: Platform.isWindows
-                  ? _buildDesktopLayout(showNowPlayingWindows)
+                  ? _buildDesktopLayout()
                   : IndexedStack(
                       index: _currentIndex,
                       children: [
@@ -121,25 +116,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ],
                     ),
             ),
-            // Android: mini-player always sits directly above the nav bar
-            if (!Platform.isWindows && hasSong)
+            // Mini-player sits directly above the nav bar when a song is playing
+            if (hasSong)
               MiniPlayer(
                 onTap: () {
-                  ref.read(showNowPlayingProvider.notifier).state = true;
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const NowPlayingScreen(),
-                    ),
-                  ).then((_) {
-                    ref.read(showNowPlayingProvider.notifier).state = false;
-                  });
-                },
-              ),
-            // Windows: mini-player always visible at bottom (even with right panel open)
-            if (hasSong && Platform.isWindows)
-              MiniPlayer(
-                onTap: () {
-                  ref.read(showNowPlayingProvider.notifier).state = true;
+                  if (Platform.isWindows) {
+                    setState(() {
+                      _showNowPlayingPanel = true;
+                    });
+                  } else {
+                    ref.read(showNowPlayingProvider.notifier).state = true;
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const NowPlayingScreen(),
+                      ),
+                    ).then((_) {
+                      ref.read(showNowPlayingProvider.notifier).state = false;
+                    });
+                  }
                 },
               ),
           ],
@@ -167,7 +161,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   // ── Desktop Layout: sidebar + content + optional right now-playing panel
-  Widget _buildDesktopLayout(bool showNowPlayingWindows) {
+  Widget _buildDesktopLayout() {
     Widget content;
     if (_selectedPlaylistWindows != null) {
       final pl = _selectedPlaylistWindows!;
@@ -198,15 +192,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       );
     }
 
-    return Row(
+    return Stack(
       children: [
-        _buildSidebar(),
-        Expanded(child: content),
-        if (showNowPlayingWindows)
-          NowPlayingRightPanel(
-            onClose: () {
-              ref.read(showNowPlayingProvider.notifier).state = false;
-            },
+        Row(
+          children: [
+            _buildSidebar(),
+            Expanded(child: content),
+          ],
+        ),
+        if (_showNowPlayingPanel)
+          Positioned(
+            top: 0,
+            bottom: 0,
+            right: 0,
+            width: 350,
+            child: NowPlayingRightPanel(
+              onClose: () {
+                setState(() {
+                  _showNowPlayingPanel = false;
+                });
+              },
+            ),
           ),
       ],
     );
@@ -291,6 +297,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     onToggle: () => setState(() => _isPersonalExpanded = !_isPersonalExpanded),
                   ),
                   if (_isPersonalExpanded) ...[
+                    if (personalPlaylists.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
+                        child: Text("No playlists yet", style: TextStyle(color: Colors.white30, fontSize: 12)),
+                      ),
                     ...personalPlaylists.map<Widget>((pl) {
                       final isSelected = _selectedOfflinePlaylistWindows != null && _selectedOfflinePlaylistWindows!["id"] == pl["id"];
                       return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
@@ -311,6 +322,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     onToggle: () => setState(() => _isOfflineExpanded = !_isOfflineExpanded),
                   ),
                   if (_isOfflineExpanded) ...[
+                    if (offlinePlaylists.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
+                        child: Text("No playlists yet", style: TextStyle(color: Colors.white30, fontSize: 12)),
+                      ),
                     ...offlinePlaylists.map<Widget>((pl) {
                       final isSelected = _selectedOfflinePlaylistWindows != null && _selectedOfflinePlaylistWindows!["id"] == pl["id"];
                       return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
@@ -445,7 +461,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  Future<void> _navigateToPlaylist(Map<String, dynamic> playlist) async {
+  Future<void> _navigateToPlaylist(int playlistId) async {
+    final playlist = OfflineStorage().getPlaylist(playlistId);
+    if (playlist == null) return;
     if (Platform.isWindows) {
       setState(() => _selectedOfflinePlaylistWindows = playlist);
     } else {
@@ -453,7 +471,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         MaterialPageRoute(
           builder: (_) => OfflinePlaylistScreen(
             playlist: playlist,
-            key: ValueKey(playlist['id']),
+            key: ValueKey(playlistId),
           ),
         ),
       );
@@ -462,7 +480,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _createOfflinePlaylist() async {
-    final created = await Navigator.of(context).push<Map<String, dynamic>>(
+    final created = await Navigator.of(context).push<int>(
       MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen(type: 'offline')),
     );
     if (created != null && mounted) {
@@ -516,6 +534,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
                         subtitle: Text(s["artist"] ?? "Unknown Artist",
                             style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SongDownloadIndicator(songId: s["id"]),
+                            const SizedBox(width: 6),
+                            SongOptionsButton(song: s),
+                          ],
+                        ),
                       ),
                     );
                   },
@@ -623,7 +649,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                 "${(song["duration_seconds"] ~/ 60).toString().padLeft(2, '0')}:${(song["duration_seconds"] % 60).toString().padLeft(2, '0')}",
                                 style: const TextStyle(color: Colors.white30, fontSize: 11),
                               ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 6),
+                            SongDownloadIndicator(songId: song["id"]),
+                            const SizedBox(width: 6),
                             SongOptionsButton(song: song),
                           ],
                         ),
@@ -677,6 +705,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           const SizedBox(height: 16),
           Expanded(
             child: ListView(
+              padding: const EdgeInsets.only(bottom: 16),
               children: [
                 // ═══════════════════════════════════════════════════
                 // SECTION 1 — My Library Playlists (Google Drive)
@@ -814,7 +843,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       trailing: IconButton(
                         icon: const Icon(Icons.add_circle_rounded, color: Color(0xFF10B981), size: 22),
                         onPressed: () async {
-                          final created = await Navigator.of(context).push<Map<String, dynamic>>(
+                          final created = await Navigator.of(context).push<int>(
                             MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen(type: 'offline')),
                           );
                           if (created != null && mounted) {
@@ -903,7 +932,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _createPersonalPlaylist() async {
-    final created = await Navigator.of(context).push<Map<String, dynamic>>(
+    final created = await Navigator.of(context).push<int>(
       MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen(type: 'personal')),
     );
     if (created != null && mounted) {
@@ -1350,8 +1379,6 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
         : widget.songs.where((s) => PlaylistSearchBar.matchSong(s, query)).toList();
 
     final playerState = ref.watch(playerProvider);
-    final bottomPad = playerState.currentSong != null ? (Platform.isWindows ? 90.0 : 76.0) : 0.0;
-    final hasSong = playerState.currentSong != null;
 
     return Scaffold(
       backgroundColor: const Color(0xFF08070D),
@@ -1365,7 +1392,7 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
           children: [
             Expanded(
               child: ListView.builder(
-                padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
+                padding: const EdgeInsets.only(left: 8, right: 8, top: 8, bottom: 8),
                 itemCount: filteredSongs.length + 1,
                 itemBuilder: (ctx, idx) {
                   if (idx == 0) {
@@ -1470,7 +1497,9 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
                               "${(s["duration_seconds"] ?? 0) ~/ 60}:${((s["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
                               style: const TextStyle(color: Colors.white30, fontSize: 11),
                             ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 6),
+                          SongDownloadIndicator(songId: s["id"]),
+                          const SizedBox(width: 6),
                           SongOptionsButton(song: s),
                         ],
                       ),
@@ -1479,22 +1508,6 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
                 },
               ),
             ),
-            if (!Platform.isWindows && hasSong)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-                child: MiniPlayer(
-                  onTap: () {
-                    ref.read(showNowPlayingProvider.notifier).state = true;
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const NowPlayingScreen(),
-                      ),
-                    ).then((_) {
-                      ref.read(showNowPlayingProvider.notifier).state = false;
-                    });
-                  },
-                ),
-              ),
           ],
         ),
       ),
@@ -1654,7 +1667,9 @@ class _PlaylistDetailScreenInlineState extends ConsumerState<_PlaylistDetailScre
                       "${(s["duration_seconds"] ?? 0) ~/ 60}:${((s["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
                       style: const TextStyle(color: Colors.white30, fontSize: 11),
                     ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: 6),
+                  SongDownloadIndicator(songId: s["id"]),
+                  const SizedBox(width: 6),
                   SongOptionsButton(song: s),
                 ],
               ),

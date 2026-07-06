@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/offline_storage.dart';
@@ -7,11 +8,12 @@ import '../services/download_manager.dart';
 import '../providers/player_provider.dart';
 import '../widgets/song_cover.dart';
 import '../widgets/song_options_menu.dart';
-import '../widgets/mini_player.dart';
-import 'now_playing_screen.dart';
+import '../widgets/song_download_indicator.dart';
 import '../widgets/playlist_search_bar.dart';
 import '../widgets/playlist_header.dart';
 import '../widgets/song_picker.dart';
+import '../widgets/mini_player.dart';
+import 'now_playing_screen.dart';
 
 class OfflinePlaylistScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> playlist;
@@ -182,7 +184,6 @@ class _OfflinePlaylistScreenState
         : songs.where((s) => PlaylistSearchBar.matchSong(s, query)).toList();
 
     final playerState = ref.watch(playerProvider);
-    final bottomPad = playerState.currentSong != null ? (Platform.isWindows ? 90.0 : 76.0) : 0.0;
 
     return Scaffold(
       backgroundColor: const Color(0xFF08070D),
@@ -202,7 +203,7 @@ class _OfflinePlaylistScreenState
           children: [
             Expanded(
               child: ListView.builder(
-                padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 16),
+                padding: const EdgeInsets.only(left: 8, right: 8, top: 8, bottom: 16),
                 itemCount: filteredSongs.length + 1,
                 itemBuilder: (ctx, idx) {
                   if (idx == 0) {
@@ -318,12 +319,10 @@ class _OfflinePlaylistScreenState
                               ),
                             ),
                           ),
-                      ],
+                          ],
                     );
                   }
                   final entry = filteredSongs[idx - 1];
-                  final status = entry['status'] as String? ?? 'notDownloaded';
-                  final progress = (entry['progress'] as num?)?.toDouble() ?? 0.0;
                   final songId = entry['song_id'] as int;
                   final isCurrent = playerState.currentSong?['id'] == songId;
 
@@ -366,27 +365,14 @@ class _OfflinePlaylistScreenState
                         children: [
                           if (isCurrent && playerState.isPlaying)
                             const Icon(Icons.equalizer_rounded, color: Color(0xFF8B5CF6), size: 20)
-                          else ...[
-                            if (status == 'downloading')
-                              SizedBox(
-                                width: 16, height: 16,
-                                child: CircularProgressIndicator(
-                                  value: progress,
-                                  strokeWidth: 2,
-                                  color: const Color(0xFF10B981),
-                                ),
-                              )
-                            else if (status == 'completed')
-                              const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 16)
-                            else if (status == 'error')
-                              const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 16)
-                            else
-                              Text(
-                                "${(entry['duration_seconds'] ?? 0) ~/ 60}:${((entry['duration_seconds'] ?? 0) % 60).toString().padLeft(2, '0')}",
-                                style: const TextStyle(color: Colors.white30, fontSize: 11),
-                              ),
-                          ],
-                          const SizedBox(width: 4),
+                          else
+                            Text(
+                              "${(entry['duration_seconds'] ?? 0) ~/ 60}:${((entry['duration_seconds'] ?? 0) % 60).toString().padLeft(2, '0')}",
+                              style: const TextStyle(color: Colors.white30, fontSize: 11),
+                            ),
+                          const SizedBox(width: 6),
+                          SongDownloadIndicator(songId: songId),
+                          const SizedBox(width: 6),
                           if ((_playlist['type'] == 'personal' || _playlist['type'] == 'offline') && _searchQuery.isEmpty) ...[
                             if (idx - 1 > 0)
                               IconButton(
@@ -431,21 +417,23 @@ class _OfflinePlaylistScreenState
                 },
               ),
             ),
-            if (!Platform.isWindows && playerState.currentSong != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-                child: MiniPlayer(
-                  onTap: () {
-                    ref.read(showNowPlayingProvider.notifier).state = true;
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const NowPlayingScreen(),
-                      ),
-                    ).then((_) {
-                      ref.read(showNowPlayingProvider.notifier).state = false;
-                    });
-                  },
-                ),
+            if (!kIsWeb && Platform.isAndroid && playerState.currentSong != null)
+              Consumer(
+                builder: (ctx, ref, _) {
+                  if (ref.watch(showNowPlayingProvider)) return const SizedBox.shrink();
+                  return MiniPlayer(
+                    onTap: () {
+                      ref.read(showNowPlayingProvider.notifier).state = true;
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const NowPlayingScreen(),
+                        ),
+                      ).then((_) {
+                        if (ctx.mounted) ref.read(showNowPlayingProvider.notifier).state = false;
+                      });
+                    },
+                  );
+                },
               ),
           ],
         ),
@@ -454,11 +442,6 @@ class _OfflinePlaylistScreenState
   }
 
   List<PopupMenuEntry<String>> _buildHeaderMenuItems() {
-    final isOffline = _playlist['type'] == 'offline';
-    final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
-    final hasPendingDownloads = songs.any((s) => s['status'] == 'downloading');
-    final hasNotDownloaded = songs.any((s) => s['status'] == 'notDownloaded');
-
     return [
       const PopupMenuItem(
         value: 'add',
@@ -469,24 +452,6 @@ class _OfflinePlaylistScreenState
           contentPadding: EdgeInsets.zero,
         ),
       ),
-      if (isOffline && hasNotDownloaded)
-        PopupMenuItem(
-          value: 'download_all',
-          enabled: !hasPendingDownloads,
-          child: ListTile(
-            leading: Icon(
-              hasPendingDownloads ? Icons.hourglass_empty_rounded : Icons.download_rounded,
-              color: const Color(0xFF8B5CF6),
-              size: 20,
-            ),
-            title: Text(
-              hasPendingDownloads ? "Downloading..." : "Download All",
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-            ),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
       const PopupMenuItem(
         value: 'rename',
         child: ListTile(
@@ -552,7 +517,7 @@ class _OfflinePlaylistScreenState
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF8B5CF6),
                           foregroundColor: Colors.white,
-                          disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                          disabledBackgroundColor: const Color(0xFF8B5CF6).withValues(alpha: 0.3),
                         ),
                         child: const Text("Add"),
                       ),
@@ -578,8 +543,18 @@ class _OfflinePlaylistScreenState
         await storage.addSongsToPlaylist(_playlist['id'] as int, songs);
         
         if (_playlist['type'] == 'offline') {
-          for (final song in songs) {
-            await _downloadManager.downloadSong(_playlist['id'] as int, song);
+          final updatedPl = storage.getPlaylist(_playlist['id'] as int);
+          if (updatedPl != null) {
+            final updatedSongs = List<Map<String, dynamic>>.from(updatedPl['songs'] ?? []);
+            for (final song in songs) {
+              try {
+                final entry = updatedSongs.firstWhere((s) => s['song_id'] == song['id']);
+                // Don't await in a loop or else it blocks the UI thread/refresh, launch async
+                _downloadManager.downloadSong(_playlist['id'] as int, entry);
+              } catch (e) {
+                print("Failed to find added song entry: $e");
+              }
+            }
           }
         }
         _refreshPlaylist();

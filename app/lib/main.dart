@@ -25,22 +25,6 @@ Future<void> main() async {
     } catch (_) {}
   }
 
-  try {
-    globalAudioHandler = await AudioService.init(
-      builder: () => SondraAudioHandler(),
-      config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.sondra.music.channel.audio',
-        androidNotificationChannelName: 'Sondra Music Playback',
-        androidNotificationChannelDescription: 'Music playback controls',
-        androidNotificationOngoing: true,
-        androidShowNotificationBadge: true,
-      ),
-    );
-  } catch (e) {
-    debugPrint('AudioService.init failed ($e) — using direct handler');
-    globalAudioHandler = SondraAudioHandler();
-  }
-
   runApp(
     const ProviderScope(
       child: SondraApp(),
@@ -48,11 +32,69 @@ Future<void> main() async {
   );
 }
 
-class SondraApp extends StatelessWidget {
+class SondraApp extends StatefulWidget {
   const SondraApp({super.key});
 
   @override
+  State<SondraApp> createState() => _SondraAppState();
+}
+
+class _SondraAppState extends State<SondraApp> {
+  bool _audioReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!kIsWeb && Platform.isAndroid) {
+      _initAndroidAudio();
+    } else {
+      _initAudio();
+    }
+  }
+
+  Future<void> _initAndroidAudio() async {
+    final handler = SondraAudioHandler();
+    globalAudioHandler = handler;
+    try {
+      await AudioService.init(
+        builder: () => handler,
+        config: const AudioServiceConfig(
+          androidNotificationChannelId: 'com.sondra.music.channel.audio',
+          androidNotificationChannelName: 'Sondra Music Playback',
+          androidNotificationChannelDescription: 'Music playback controls',
+          androidNotificationOngoing: true,
+          androidShowNotificationBadge: true,
+        ),
+      ).timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // timeout or error — handler already set as direct, carry on
+    }
+    if (mounted) setState(() => _audioReady = true);
+  }
+
+  Future<void> _initAudio() async {
+    globalAudioHandler = SondraAudioHandler();
+    try {
+      await AudioService.init(
+        builder: () => SondraAudioHandler(),
+        config: const AudioServiceConfig(
+          androidNotificationChannelId: 'com.sondra.music.channel.audio',
+          androidNotificationChannelName: 'Sondra Music Playback',
+          androidNotificationChannelDescription: 'Music playback controls',
+          androidNotificationOngoing: true,
+          androidShowNotificationBadge: true,
+        ),
+      );
+    } catch (e) {
+      debugPrint('AudioService.init failed ($e) — using direct handler');
+    }
+    if (mounted) setState(() => _audioReady = true);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final showOverlay = !_audioReady && !kIsWeb && Platform.isAndroid;
+
     return MaterialApp(
       title: 'Sondra Music',
       debugShowCheckedModeBanner: false,
@@ -128,22 +170,45 @@ class SondraApp extends StatelessWidget {
               child: Stack(
                 children: [
                   child!,
+                  if (showOverlay)
+                    _buildLoadingScreen(),
                 ],
               ),
             );
           },
         );
       },
-      home: const AppEntryPoint(),
+      home: const HomeScreen(),
     );
   }
-}
 
-class AppEntryPoint extends StatelessWidget {
-  const AppEntryPoint({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const HomeScreen();
+  Widget _buildLoadingScreen() {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              "Sondra",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B5CF6)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

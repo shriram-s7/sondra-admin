@@ -74,40 +74,31 @@ Here is the complete source code for all the core files in the project:
 ### 1. `app/lib/main.dart`
 [main.dart](file:///e:/PROJECT SONDRA/sondra/app/lib/main.dart)
 ```dart
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_service/audio_service.dart';
 import 'services/audio_handler.dart';
 import 'services/offline_storage.dart';
+import 'services/api_service.dart';
 import 'providers/player_provider.dart';
-import 'screens/setup_screen.dart';
+import 'screens/home_screen.dart';
 
-// Global navigator key so the mini-player overlay can show modal sheets
-// even when the context is above the navigator tree.
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize offline storage for offline playlists
   await OfflineStorage().init();
+  await ApiService().init();
 
-  // AudioService.init may fail silently on Windows/desktop; fall back to
-  // direct handler so just_audio still works natively.
-  try {
-    globalAudioHandler = await AudioService.init(
-      builder: () => SondraAudioHandler(),
-      config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.sondra.music.channel.audio',
-        androidNotificationChannelName: 'Sondra Music Playback',
-        androidNotificationOngoing: true,
-        androidShowNotificationBadge: true,
-      ),
-    );
-  } catch (e) {
-    debugPrint('AudioService.init failed ($e) — using direct handler');
-    globalAudioHandler = SondraAudioHandler();
+  if (!kIsWeb && Platform.isAndroid) {
+    try {
+      await const MethodChannel('com.sondra.music/notification')
+          .invokeMethod('ensureChannel');
+    } catch (_) {}
   }
 
   runApp(
@@ -117,11 +108,69 @@ Future<void> main() async {
   );
 }
 
-class SondraApp extends StatelessWidget {
+class SondraApp extends StatefulWidget {
   const SondraApp({super.key});
 
   @override
+  State<SondraApp> createState() => _SondraAppState();
+}
+
+class _SondraAppState extends State<SondraApp> {
+  bool _audioReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!kIsWeb && Platform.isAndroid) {
+      _initAndroidAudio();
+    } else {
+      _initAudio();
+    }
+  }
+
+  Future<void> _initAndroidAudio() async {
+    final handler = SondraAudioHandler();
+    globalAudioHandler = handler;
+    try {
+      await AudioService.init(
+        builder: () => handler,
+        config: const AudioServiceConfig(
+          androidNotificationChannelId: 'com.sondra.music.channel.audio',
+          androidNotificationChannelName: 'Sondra Music Playback',
+          androidNotificationChannelDescription: 'Music playback controls',
+          androidNotificationOngoing: true,
+          androidShowNotificationBadge: true,
+        ),
+      ).timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // timeout or error — handler already set as direct, carry on
+    }
+    if (mounted) setState(() => _audioReady = true);
+  }
+
+  Future<void> _initAudio() async {
+    globalAudioHandler = SondraAudioHandler();
+    try {
+      await AudioService.init(
+        builder: () => SondraAudioHandler(),
+        config: const AudioServiceConfig(
+          androidNotificationChannelId: 'com.sondra.music.channel.audio',
+          androidNotificationChannelName: 'Sondra Music Playback',
+          androidNotificationChannelDescription: 'Music playback controls',
+          androidNotificationOngoing: true,
+          androidShowNotificationBadge: true,
+        ),
+      );
+    } catch (e) {
+      debugPrint('AudioService.init failed ($e) — using direct handler');
+    }
+    if (mounted) setState(() => _audioReady = true);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final showOverlay = !_audioReady && !kIsWeb && Platform.isAndroid;
+
     return MaterialApp(
       title: 'Sondra Music',
       debugShowCheckedModeBanner: false,
@@ -142,22 +191,17 @@ class SondraApp extends StatelessWidget {
           bodyMedium: TextStyle(color: Color(0xFF9CA3AF)),
         ),
       ),
-
-      // builder wraps the entire navigator stack, so the MiniPlayer
-      // is rendered above ALL routes (home, playlists, now-playing, etc.)
       builder: (context, child) {
         return Consumer(
           builder: (ctx, ref, _) {
             final playerState = ref.watch(playerProvider);
 
-            // Wrap in a global Focus widget to handle global Spacebar & 'P' keyboard shortcuts
             return Focus(
               autofocus: true,
               focusNode: FocusNode(debugLabel: 'GlobalAppFocus'),
               onKeyEvent: (node, event) {
                 final isKeyDown = event is KeyDownEvent;
                 if (isKeyDown) {
-                  // Bypass hotkeys if a text input currently has active focus
                   final primaryFocus = FocusManager.instance.primaryFocus;
                   final hasInputFocus = primaryFocus != null &&
                       (primaryFocus.context?.widget is EditableText ||
@@ -201,20 +245,46 @@ class SondraApp extends StatelessWidget {
               },
               child: Stack(
                 children: [
-                  // All app routes live inside `child`
                   child!,
-
-                  // Android mobile floating mini-player overlay.
-                  // Windows uses its own inline layout in HomeScreen.
-
+                  if (showOverlay)
+                    _buildLoadingScreen(),
                 ],
               ),
             );
           },
         );
       },
+      home: const HomeScreen(),
+    );
+  }
 
-      home: const SetupScreen(),
+  Widget _buildLoadingScreen() {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              "Sondra",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B5CF6)),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -249,6 +319,7 @@ class PlayerState {
   final List<Map<String, dynamic>> activePlaylist;
   final List<Map<String, dynamic>> queue;
   final String activePlaylistName;
+  final String? bufferingMessage;
 
   PlayerState({
     this.currentSong,
@@ -263,6 +334,7 @@ class PlayerState {
     this.activePlaylist = const [],
     this.queue = const [],
     this.activePlaylistName = "Song Pool",
+    this.bufferingMessage,
   });
 
   PlayerState copyWith({
@@ -278,6 +350,7 @@ class PlayerState {
     List<Map<String, dynamic>>? activePlaylist,
     List<Map<String, dynamic>>? queue,
     String? activePlaylistName,
+    String? bufferingMessage,
   }) {
     return PlayerState(
       currentSong: currentSong ?? this.currentSong,
@@ -292,6 +365,7 @@ class PlayerState {
       activePlaylist: activePlaylist ?? this.activePlaylist,
       queue: queue ?? this.queue,
       activePlaylistName: activePlaylistName ?? this.activePlaylistName,
+      bufferingMessage: bufferingMessage,
     );
   }
 }
@@ -303,7 +377,17 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   StreamSubscription? _durSub;
   StreamSubscription? _stateSub;
   bool _isBusy = false;
+  bool _advancingTrack = false;
   DateTime? _lastActionTime;
+  Timer? _bufferingTimer;
+  Timer? _bufferingSevereTimer;
+
+  // Cache for playlist context lookups so the queue path in handleNext()
+  // doesn't block on 1-3 sequential network calls per transition.
+  List<Map<String, dynamic>>? _cachedPlaylists;
+  List<Map<String, dynamic>>? _cachedLibrarySongs;
+  DateTime? _cacheValidUntil;
+  static const _cacheTtl = Duration(seconds: 30);
 
   PlayerNotifier() : super(PlayerState()) {
     _posSub = globalAudioHandler.player.positionStream.listen((pos) {
@@ -317,19 +401,54 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     });
 
     _stateSub = globalAudioHandler.player.playerStateStream.listen((pState) {
-      if (_isBusy) return;
+      final wasBuffering = state.isBuffering;
+      final nowBuffering = pState.processingState == ProcessingState.buffering ||
+                           pState.processingState == ProcessingState.loading;
+
       state = state.copyWith(
-        isPlaying: pState.playing,
-        isBuffering: pState.processingState == ProcessingState.buffering ||
-                     pState.processingState == ProcessingState.loading,
+        isBuffering: nowBuffering,
       );
+
+      // Buffering timeout management (Improvement 4)
+      if (nowBuffering && !wasBuffering) {
+        _bufferingTimer?.cancel();
+        _bufferingSevereTimer?.cancel();
+        _bufferingTimer = Timer(const Duration(seconds: 10), () {
+          state = state.copyWith(
+            bufferingMessage: "Slow connection, still buffering...",
+          );
+        });
+        _bufferingSevereTimer = Timer(const Duration(seconds: 25), () {
+          state = state.copyWith(
+            bufferingMessage: null,
+          );
+          _retryCurrentSong();
+        });
+      } else if (!nowBuffering) {
+        if (wasBuffering) {
+          _bufferingTimer?.cancel();
+          _bufferingSevereTimer?.cancel();
+          _bufferingTimer = null;
+          _bufferingSevereTimer = null;
+        }
+        if (state.bufferingMessage != null) {
+          state = state.copyWith(bufferingMessage: null);
+        }
+      }
+
       if (pState.processingState == ProcessingState.completed) {
         if (state.repeat == "one") {
           state = state.copyWith(position: Duration.zero);
           seek(Duration.zero);
           globalAudioHandler.play();
         } else {
-          handleNext();
+          if (_advancingTrack) return;
+          _advancingTrack = true;
+          try {
+            handleNext();
+          } finally {
+            _advancingTrack = false;
+          }
         }
       }
     });
@@ -341,106 +460,77 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       }
     });
 
-    // Register Media / Earbud skip controls callback from background handler
-    // CHANGE 5: 600ms debounce prevents double-tap earbud from firing twice
-    globalAudioHandler.onSkipToNext = () async {
-      final now = DateTime.now();
-      if (_lastActionTime != null &&
-          now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
-        return;
+    globalAudioHandler.onSkipToNext = () => handleNext();
+    globalAudioHandler.onSkipToPrevious = () => handlePrev();
+
+    globalAudioHandler.player.playingStream.listen((playing) {
+      state = state.copyWith(isPlaying: playing);
+      if (Platform.isWindows) {
+        if (!state.isBuffering) {
+          globalAudioHandler.setSmtcPlaying(playing);
+        }
       }
-      _lastActionTime = now;
-      handleNext();
-    };
-    globalAudioHandler.onSkipToPrevious = () async {
-      final now = DateTime.now();
-      if (_lastActionTime != null &&
-          now.difference(_lastActionTime!) < const Duration(milliseconds: 600)) {
-        return;
-      }
-      _lastActionTime = now;
-      handlePrev();
-    };
+    });
   }
 
   Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName, bool internalCall = false}) async {
     if (_isBusy && !internalCall) return;
     _isBusy = true;
     try {
-      // 1. Immediately stop current playback to release native resources instantly
-      await globalAudioHandler.player.stop();
-      await globalAudioHandler.player.seek(Duration.zero);
+      final autoPlay = internalCall ? (state.isPlaying || _advancingTrack || globalAudioHandler.player.playing) : true;
+      final isNewQueue = playlist.length != state.originalPlaylist.length ||
+          playlist.asMap().entries.any((e) => state.originalPlaylist.length <= e.key || e.value["id"] != state.originalPlaylist[e.key]["id"]);
 
-      // 2. Identify if it is a new queue or transition within the same queue
-      bool isNewQueue = false;
-      if (state.originalPlaylist.length != playlist.length) {
-        isNewQueue = true;
-      } else {
-        for (int i = 0; i < playlist.length; i++) {
-          if (state.originalPlaylist[i]["id"] != playlist[i]["id"]) {
-            isNewQueue = true;
-            break;
-          }
-        }
-      }
-
-      List<Map<String, dynamic>> newOriginal = isNewQueue ? playlist : state.originalPlaylist;
       List<Map<String, dynamic>> newActive = isNewQueue ? List.from(playlist) : state.activePlaylist;
-
-      // Apply active shuffle to new queue immediately if turned on
       if (isNewQueue && state.shuffle) {
         _secureShuffle(newActive);
         newActive.removeWhere((s) => s["id"] == song["id"]);
         newActive.insert(0, song);
       }
 
-      // CHANGE 6: Set playlist/buffering state BEFORE load but do NOT set currentSong yet.
-      // currentSong is updated AFTER playUri() succeeds so the banner always matches
-      // the song that is actually playing, not a song that is still loading.
-      final resolvedPlaylistName = playlistName ?? (isNewQueue ? "Song Pool" : state.activePlaylistName);
       state = state.copyWith(
-        originalPlaylist: newOriginal,
+        originalPlaylist: isNewQueue ? playlist : state.originalPlaylist,
         activePlaylist: newActive,
-        activePlaylistName: resolvedPlaylistName,
+        activePlaylistName: playlistName ?? (isNewQueue ? "Song Pool" : state.activePlaylistName),
         position: startSeconds != null ? Duration(seconds: startSeconds) : Duration.zero,
+        currentSong: song,
         isBuffering: true,
       );
 
-      try {
-        // 3. INSTANT PLAYBACK: Use local file if downloaded, otherwise stream
-        String directUrl;
-        final localPath = song["local_file_path"];
-        if (localPath != null && await File(localPath).exists()) {
-          directUrl = localPath;
-        } else {
-          directUrl = "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
-        }
+      final dlDir = await OfflineStorage().downloadsDir;
+      final localFile = File('$dlDir/${song["id"]}.mp3');
+      final localExists = await localFile.exists() && await localFile.length() > 0;
+      final url = localExists
+          ? localFile.path
+          : "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
 
-        final mediaItem = MediaItem(
-          id: song["id"].toString(),
-          album: song["album"] ?? "Unknown Album",
-          title: song["title"] ?? "Unknown Title",
-          artist: song["artist"] ?? "Unknown Artist",
-          duration: Duration(seconds: song["duration_seconds"] ?? 0),
-          artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover"),
-        );
+      final mediaItem = MediaItem(
+        id: song["id"].toString(),
+        album: song["album"] ?? "Unknown Album",
+        title: song["title"] ?? "Unknown Title",
+        artist: song["artist"] ?? "Unknown Artist",
+        duration: Duration(seconds: song["duration_seconds"] ?? 0),
+        artUri: Uri.parse("${_api.baseUrl}/api/songs/${song["id"]}/cover?v=${song["id"]}"),
+      );
 
-        await globalAudioHandler.playUri(directUrl, mediaItem);
+      await globalAudioHandler.playUri(url, mediaItem, autoPlay: autoPlay)
+          .timeout(const Duration(seconds: 20));
 
-        // CHANGE 6: Only now that playUri() has succeeded do we update the banner song.
-        state = state.copyWith(
-          currentSong: song,
-          isBuffering: false,
-          isPlaying: true,
-        );
+      state = state.copyWith(
+        isBuffering: false,
+      );
 
-        if (startSeconds != null) {
-          await globalAudioHandler.seek(Duration(seconds: startSeconds));
-        }
-      } catch (e) {
-        print("Error loading song in provider: $e");
-        // Skip to next song automatically on loading error (Rule 5)
-        handleNext();
+      if (Platform.isWindows) {
+        globalAudioHandler.setSmtcPlaying(autoPlay || state.isPlaying || globalAudioHandler.player.playing);
+      }
+
+      if (startSeconds != null) {
+        await globalAudioHandler.seek(Duration(seconds: startSeconds));
+      }
+    } catch (e) {
+      state = state.copyWith(isBuffering: false, bufferingMessage: null);
+      if (state.currentSong?["id"] == song["id"]) {
+        state = state.copyWith(currentSong: null);
       }
     } finally {
       _isBusy = false;
@@ -475,7 +565,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   }
 
   Future<Map<String, dynamic>> _findPlaylistContextFor(Map<String, dynamic> song) async {
-    // 1. Look up in local personal/offline playlists first
+    // 1. Look up in local personal/offline playlists first (always fast, no cache needed)
     final allLocalPlaylists = OfflineStorage().getPlaylists();
     for (final pl in allLocalPlaylists) {
       final songs = List<Map<String, dynamic>>.from(pl["songs"] ?? []);
@@ -495,15 +585,24 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       }
     }
 
-    // 2. Fetch remote playlists from ApiService
+    // 2. Use cached remote data if fresh, to avoid blocking network calls on every transition
+    final now = DateTime.now();
+    if (_cacheValidUntil != null && now.isBefore(_cacheValidUntil!)) {
+      final lookupResult = _lookupInCache(song);
+      if (lookupResult != null) return lookupResult;
+    }
+
+    // 3. Fetch remote playlists from ApiService (cache miss or expired)
     try {
       final remotePlaylists = await _api.getPlaylists();
+      _cachedPlaylists = remotePlaylists.cast<Map<String, dynamic>>();
       for (final pl in remotePlaylists) {
         final songs = List<dynamic>.from(pl["songs"] ?? []);
         final exists = songs.any((s) => s["id"] == song["id"]);
         if (exists) {
           final name = pl["name"] ?? "Remote Playlist";
           final list = songs.map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s)).toList();
+          _cacheValidUntil = now.add(_cacheTtl);
           return {'name': name, 'songs': list};
         }
       }
@@ -511,9 +610,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       print("Error fetching remote playlists in _findPlaylistContextFor: $e");
     }
 
-    // 3. Fallback to all library songs
+    // 4. Fallback to all library songs
     try {
       final allLibrary = await _api.getSongs();
+      _cachedLibrarySongs = allLibrary.cast<Map<String, dynamic>>();
+      _cacheValidUntil = now.add(_cacheTtl);
       final list = allLibrary.map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s)).toList();
       return {'name': "Music Library", 'songs': list};
     } catch (e) {
@@ -521,6 +622,32 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     }
 
     return {'name': "Music Library", 'songs': [song]};
+  }
+
+  /// Tries to find [song] in the cached playlists or library, returning the
+  /// context immediately without any network I/O. Returns null on cache miss.
+  Map<String, dynamic>? _lookupInCache(Map<String, dynamic> song) {
+    // Search cached remote playlists
+    if (_cachedPlaylists != null) {
+      for (final pl in _cachedPlaylists!) {
+        final songs = List<dynamic>.from(pl["songs"] ?? []);
+        if (songs.any((s) => s["id"] == song["id"])) {
+          final name = pl["name"] ?? "Remote Playlist";
+          final list = songs.map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s)).toList();
+          return {'name': name, 'songs': list};
+        }
+      }
+    }
+    // Search cached library
+    if (_cachedLibrarySongs != null) {
+      if (_cachedLibrarySongs!.any((s) => s["id"] == song["id"])) {
+        final list = _cachedLibrarySongs!
+            .map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s))
+            .toList();
+        return {'name': "Music Library", 'songs': list};
+      }
+    }
+    return null;
   }
 
   void toggleShuffle() {
@@ -566,7 +693,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     }
     _lastActionTime = now;
 
-    if (_isBusy) return;
+    if (_isBusy) {
+      while (_isBusy) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    }
     _isBusy = true;
 
     try {
@@ -593,14 +724,21 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       if (idx != -1) {
         int nextIdx = idx + 1;
         if (nextIdx >= state.activePlaylist.length) {
-          // RULE 5 - Loop/Repeat checks
-          if (state.repeat == "all") {
-            nextIdx = 0;
-            await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
-          } else {
-            // End of playlist: stop playback and reset position
-            await globalAudioHandler.pause();
-            await seek(Duration.zero);
+          if (state.shuffle && state.originalPlaylist.isNotEmpty) {
+            // Shuffle mode: generate next valid shuffled playback sequence (or restart it)
+            final newShuffled = List<Map<String, dynamic>>.from(state.originalPlaylist);
+            _secureShuffle(newShuffled);
+            if (newShuffled.length > 1 && newShuffled.first["id"] == state.currentSong!["id"]) {
+              // Swap the first song with the second to avoid immediate repeat
+              final temp = newShuffled[0];
+              newShuffled[0] = newShuffled[1];
+              newShuffled[1] = temp;
+            }
+            state = state.copyWith(activePlaylist: newShuffled);
+            await playSong(newShuffled.first, state.originalPlaylist, internalCall: true);
+          } else if (state.activePlaylist.isNotEmpty) {
+            // Linear mode: loop back to the first song, looping forever
+            await playSong(state.activePlaylist[0], state.originalPlaylist, internalCall: true);
           }
         } else {
           await playSong(state.activePlaylist[nextIdx], state.originalPlaylist, internalCall: true);
@@ -619,7 +757,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     }
     _lastActionTime = now;
 
-    if (_isBusy) return;
+    if (_isBusy) {
+      while (_isBusy) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    }
     _isBusy = true;
 
     try {
@@ -628,6 +770,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       // Restart song if it has played past 3 seconds
       if (state.position.inSeconds > 3) {
         seek(Duration.zero);
+        globalAudioHandler.play();
         return;
       }
 
@@ -687,12 +830,25 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     await playSong(startSong, playlist, playlistName: playlistName);
   }
 
+  Future<void> _retryCurrentSong() async {
+    if (state.currentSong == null || state.activePlaylist.isEmpty) return;
+    _isBusy = false;
+    await playSong(
+      state.currentSong!,
+      state.activePlaylist,
+      playlistName: state.activePlaylistName,
+      internalCall: true,
+    );
+  }
+
   @override
   void dispose() {
     _posSub?.cancel();
     _durSub?.cancel();
     _stateSub?.cancel();
     _positionLogTimer?.cancel();
+    _bufferingTimer?.cancel();
+    _bufferingSevereTimer?.cancel();
     super.dispose();
   }
 }
@@ -709,215 +865,294 @@ final showBottomNavBarProvider = StateProvider<bool>((ref) => false);
 [setup_screen.dart](file:///e:/PROJECT SONDRA/sondra/app/lib/screens/setup_screen.dart)
 ```dart
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'home_screen.dart';
 
 class SetupScreen extends StatefulWidget {
-  const SetupScreen({super.key});
+  final bool isSetup;
+  final VoidCallback? onUnlock;
+
+  const SetupScreen({super.key, this.isSetup = false, this.onUnlock});
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
 }
 
 class _SetupScreenState extends State<SetupScreen> {
-  final _usernameController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _isLoading = false;
+  final _codeController = TextEditingController();
+  bool _isSetup = false;
+  bool _showConfirm = false;
   String? _errorMessage;
+  String _firstEntry = "";
 
   @override
   void initState() {
     super.initState();
-    _checkExistingSession();
+    _checkIfSetupNeeded();
   }
 
-  Future<void> _checkExistingSession() async {
-    final api = ApiService();
-    await api.init();
-    if (api.baseUrl != null && api.token != null) {
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
-      }
+  Future<void> _checkIfSetupNeeded() async {
+    final prefs = await SharedPreferences.getInstance();
+    final passcodeSet = prefs.getBool('passcode_set') ?? false;
+    if (mounted) {
+      setState(() {
+        _isSetup = !passcodeSet || widget.isSetup;
+      });
     }
   }
 
-  Future<void> _handleLogin() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+  Future<void> _submitPasscode() async {
+    final code = _codeController.text.trim();
 
-    final username = _usernameController.text.trim();
-    final password = _passwordController.text.trim();
-
-    if (username.isEmpty || password.isEmpty) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = "All fields are required.";
-      });
+    if (code.length != 4) {
+      setState(() => _errorMessage = "Enter exactly 4 digits.");
       return;
     }
 
-    final success = await ApiService().login(username, password);
-    
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
+    if (_isSetup) {
+      if (!_showConfirm) {
+        _firstEntry = code;
+        setState(() {
+          _showConfirm = true;
+          _errorMessage = null;
+          _codeController.clear();
+        });
+        return;
+      }
 
-      if (success) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
+      if (code != _firstEntry) {
+        setState(() {
+          _errorMessage = "Passcodes do not match.";
+          _showConfirm = false;
+          _firstEntry = "";
+          _codeController.clear();
+        });
+        return;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('passcode_hash', _firstEntry);
+      await prefs.setBool('passcode_set', true);
+      await prefs.setInt('last_active_time', DateTime.now().millisecondsSinceEpoch);
+
+      if (widget.onUnlock != null) {
+        widget.onUnlock!();
+      } else {
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+          );
+        }
+      }
+    } else {
+      final prefs = await SharedPreferences.getInstance();
+      final savedHash = prefs.getString('passcode_hash') ?? '';
+
+      if (code == savedHash) {
+        await prefs.setInt('last_active_time', DateTime.now().millisecondsSinceEpoch);
+        if (widget.onUnlock != null) {
+          widget.onUnlock!();
+        }
       } else {
         setState(() {
-          _errorMessage = "Authentication failed. Check your credentials.";
+          _errorMessage = "Incorrect passcode.";
+          _codeController.clear();
         });
       }
     }
   }
 
   @override
+  void dispose() {
+    _codeController.dispose();
+    super.dispose();
+  }
+
+  void _onDigit(String digit) {
+    if (_codeController.text.length < 4) {
+      _codeController.text += digit;
+      if (_codeController.text.length == 4) {
+        _submitPasscode();
+      }
+    }
+  }
+
+  void _onDelete() {
+    if (_codeController.text.isNotEmpty) {
+      _codeController.text = _codeController.text.substring(0, _codeController.text.length - 1);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0E17),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const Duration(milliseconds: 24) == Duration.zero 
-              ? EdgeInsets.zero 
-              : const EdgeInsets.symmetric(horizontal: 28),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(
-                Icons.music_note_rounded,
-                color: Color(0xFF8B5CF6),
-                size: 72,
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                "Sondra Music",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                "Private Server Streaming App",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white60,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 40),
-              
-              if (_errorMessage != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.redAccent.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
-                  ),
-                  child: Text(
-                    _errorMessage!,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 13),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
+      backgroundColor: const Color(0xFF08070D),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.lock_outline_rounded, color: Color(0xFF8B5CF6), size: 56),
                 const SizedBox(height: 16),
-              ],
-
-              // Username Field
-              TextField(
-                controller: _usernameController,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: "Admin Username",
-                  labelStyle: const TextStyle(color: Colors.white60),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.05),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
+                Text(
+                  _isSetup
+                      ? (_showConfirm ? "Confirm Passcode" : "Set Passcode")
+                      : "Enter Passcode",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-
-              // Password Field
-              TextField(
-                controller: _passwordController,
-                obscureText: true,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: "Password",
-                  labelStyle: const TextStyle(color: Colors.white60),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.05),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
-                  ),
+                const SizedBox(height: 8),
+                Text(
+                  _isSetup
+                      ? "Create a 4-digit passcode to protect your app."
+                      : "Enter your 4-digit passcode to unlock.",
+                  style: const TextStyle(color: Colors.white60, fontSize: 13),
                 ),
-              ),
-              const SizedBox(height: 24),
+                const SizedBox(height: 32),
 
-              ElevatedButton(
-                onPressed: _isLoading ? null : _handleLogin,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF8B5CF6),
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                if (_errorMessage != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+                    ),
+                    child: Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: Colors.redAccent, fontSize: 13),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text(
-                        "Log In",
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(4, (i) {
+                    final filled = i < _codeController.text.length;
+                    return Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8),
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: filled ? const Color(0xFF8B5CF6) : Colors.white24,
                       ),
-              ),
-            ],
+                    );
+                  }),
+                ),
+                const SizedBox(height: 32),
+
+                _buildNumpad(),
+                const SizedBox(height: 24),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: _submitPasscode,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8B5CF6),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text(
+                      _isSetup ? (_showConfirm ? "Confirm" : "Next") : "Unlock",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+
+                if (!_isSetup)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: TextButton(
+                      onPressed: () async {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.remove('passcode_hash');
+                        await prefs.remove('passcode_set');
+                        if (mounted) {
+                          setState(() {
+                            _isSetup = true;
+                            _showConfirm = false;
+                            _errorMessage = null;
+                            _codeController.clear();
+                          });
+                        }
+                      },
+                      child: const Text(
+                        "Reset Passcode",
+                        style: TextStyle(color: Colors.white38, fontSize: 13),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    _passwordController.dispose();
-    super.dispose();
+  Widget _buildNumpad() {
+    return Column(
+      children: [
+        _buildNumpadRow(["1", "2", "3"]),
+        _buildNumpadRow(["4", "5", "6"]),
+        _buildNumpadRow(["7", "8", "9"]),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(width: 72),
+            _numpadKey("0"),
+            GestureDetector(
+              onTap: _onDelete,
+              child: Container(
+                width: 72,
+                height: 56,
+                alignment: Alignment.center,
+                child: const Icon(Icons.backspace_outlined, color: Colors.white54, size: 24),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNumpadRow(List<String> keys) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: keys.map((k) => _numpadKey(k)).toList(),
+    );
+  }
+
+  Widget _numpadKey(String digit) {
+    return GestureDetector(
+      onTap: () => _onDigit(digit),
+      child: Container(
+        width: 72,
+        height: 56,
+        margin: const EdgeInsets.all(4),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          digit,
+          style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w500),
+        ),
+      ),
+    );
   }
 }
 ```
@@ -934,11 +1169,11 @@ import '../services/offline_storage.dart';
 import '../providers/player_provider.dart';
 import '../widgets/song_cover.dart';
 import '../widgets/mini_player.dart';
-import 'setup_screen.dart';
 import 'now_playing_screen.dart';
 import 'create_offline_playlist_screen.dart';
 import 'offline_playlist_screen.dart';
 import '../widgets/song_options_menu.dart';
+import '../widgets/song_download_indicator.dart';
 import '../widgets/playlist_search_bar.dart';
 import '../widgets/playlist_header.dart';
 
@@ -953,10 +1188,6 @@ final playlistsProvider = FutureProvider.autoDispose<List<dynamic>>((ref) async 
 
 final historyRecentProvider = FutureProvider.autoDispose<List<dynamic>>((ref) async {
   return await ApiService().getHistoryRecent();
-});
-
-final historyContinueProvider = FutureProvider.autoDispose<List<dynamic>>((ref) async {
-  return await ApiService().getHistoryContinue();
 });
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -976,6 +1207,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _isLibraryExpanded = false;
   bool _isPersonalExpanded = false;
   bool _isOfflineExpanded = false;
+  bool _showNowPlayingPanel = false;
 
   @override
   void initState() {
@@ -989,7 +1221,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ref.invalidate(songsProvider);
           ref.invalidate(playlistsProvider);
           ref.invalidate(historyRecentProvider);
-          ref.invalidate(historyContinueProvider);
         }
       }
     });
@@ -1010,7 +1241,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ref.invalidate(songsProvider);
             ref.invalidate(playlistsProvider);
             ref.invalidate(historyRecentProvider);
-            ref.invalidate(historyContinueProvider);
           }
         }
       } catch (e) {
@@ -1027,7 +1257,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final playerState = ref.watch(playerProvider);
-    final showNowPlayingWindows = ref.watch(showNowPlayingProvider);
     final hasSong = playerState.currentSong != null;
 
     return Scaffold(
@@ -1038,7 +1267,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             // Screen content — scrollable behind the mini-player
             Expanded(
               child: Platform.isWindows
-                  ? _buildDesktopLayout(showNowPlayingWindows)
+                  ? _buildDesktopLayout()
                   : IndexedStack(
                       index: _currentIndex,
                       children: [
@@ -1049,25 +1278,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ],
                     ),
             ),
-            // Android: mini-player always sits directly above the nav bar
-            if (!Platform.isWindows && hasSong)
+            // Mini-player sits directly above the nav bar when a song is playing
+            if (hasSong)
               MiniPlayer(
                 onTap: () {
-                  ref.read(showNowPlayingProvider.notifier).state = true;
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const NowPlayingScreen(),
-                    ),
-                  ).then((_) {
-                    ref.read(showNowPlayingProvider.notifier).state = false;
-                  });
-                },
-              ),
-            // Windows: mini-player always visible at bottom (even with right panel open)
-            if (hasSong && Platform.isWindows)
-              MiniPlayer(
-                onTap: () {
-                  ref.read(showNowPlayingProvider.notifier).state = true;
+                  if (Platform.isWindows) {
+                    setState(() {
+                      _showNowPlayingPanel = true;
+                    });
+                  } else {
+                    ref.read(showNowPlayingProvider.notifier).state = true;
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const NowPlayingScreen(),
+                      ),
+                    ).then((_) {
+                      ref.read(showNowPlayingProvider.notifier).state = false;
+                    });
+                  }
                 },
               ),
           ],
@@ -1095,7 +1323,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   // ── Desktop Layout: sidebar + content + optional right now-playing panel
-  Widget _buildDesktopLayout(bool showNowPlayingWindows) {
+  Widget _buildDesktopLayout() {
     Widget content;
     if (_selectedPlaylistWindows != null) {
       final pl = _selectedPlaylistWindows!;
@@ -1126,15 +1354,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       );
     }
 
-    return Row(
+    return Stack(
       children: [
-        _buildSidebar(),
-        Expanded(child: content),
-        if (showNowPlayingWindows)
-          NowPlayingRightPanel(
-            onClose: () {
-              ref.read(showNowPlayingProvider.notifier).state = false;
-            },
+        Row(
+          children: [
+            _buildSidebar(),
+            Expanded(child: content),
+          ],
+        ),
+        if (_showNowPlayingPanel)
+          Positioned(
+            top: 0,
+            bottom: 0,
+            right: 0,
+            width: 350,
+            child: NowPlayingRightPanel(
+              onClose: () {
+                setState(() {
+                  _showNowPlayingPanel = false;
+                });
+              },
+            ),
           ),
       ],
     );
@@ -1219,6 +1459,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     onToggle: () => setState(() => _isPersonalExpanded = !_isPersonalExpanded),
                   ),
                   if (_isPersonalExpanded) ...[
+                    if (personalPlaylists.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
+                        child: Text("No playlists yet", style: TextStyle(color: Colors.white30, fontSize: 12)),
+                      ),
                     ...personalPlaylists.map<Widget>((pl) {
                       final isSelected = _selectedOfflinePlaylistWindows != null && _selectedOfflinePlaylistWindows!["id"] == pl["id"];
                       return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
@@ -1239,6 +1484,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     onToggle: () => setState(() => _isOfflineExpanded = !_isOfflineExpanded),
                   ),
                   if (_isOfflineExpanded) ...[
+                    if (offlinePlaylists.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
+                        child: Text("No playlists yet", style: TextStyle(color: Colors.white30, fontSize: 12)),
+                      ),
                     ...offlinePlaylists.map<Widget>((pl) {
                       final isSelected = _selectedOfflinePlaylistWindows != null && _selectedOfflinePlaylistWindows!["id"] == pl["id"];
                       return _sidebarPlaylistItem(pl["name"] ?? "Unnamed", isSelected, () {
@@ -1373,11 +1623,31 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
+  Future<void> _navigateToPlaylist(int playlistId) async {
+    final playlist = OfflineStorage().getPlaylist(playlistId);
+    if (playlist == null) return;
+    if (Platform.isWindows) {
+      setState(() => _selectedOfflinePlaylistWindows = playlist);
+    } else {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => OfflinePlaylistScreen(
+            playlist: playlist,
+            key: ValueKey(playlistId),
+          ),
+        ),
+      );
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> _createOfflinePlaylist() async {
-    final created = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen()),
+    final created = await Navigator.of(context).push<int>(
+      MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen(type: 'offline')),
     );
-    if (created == true && mounted) setState(() {});
+    if (created != null && mounted) {
+      _navigateToPlaylist(created);
+    }
   }
 
   // --- TAB BUILDERS ---
@@ -1426,6 +1696,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
                         subtitle: Text(s["artist"] ?? "Unknown Artist",
                             style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SongDownloadIndicator(songId: s["id"]),
+                            const SizedBox(width: 6),
+                            SongOptionsButton(song: s),
+                          ],
+                        ),
                       ),
                     );
                   },
@@ -1533,7 +1811,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                 "${(song["duration_seconds"] ~/ 60).toString().padLeft(2, '0')}:${(song["duration_seconds"] % 60).toString().padLeft(2, '0')}",
                                 style: const TextStyle(color: Colors.white30, fontSize: 11),
                               ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 6),
+                            SongDownloadIndicator(songId: song["id"]),
+                            const SizedBox(width: 6),
                             SongOptionsButton(song: song),
                           ],
                         ),
@@ -1587,6 +1867,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           const SizedBox(height: 16),
           Expanded(
             child: ListView(
+              padding: const EdgeInsets.only(bottom: 16),
               children: [
                 // ═══════════════════════════════════════════════════
                 // SECTION 1 — My Library Playlists (Google Drive)
@@ -1724,10 +2005,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       trailing: IconButton(
                         icon: const Icon(Icons.add_circle_rounded, color: Color(0xFF10B981), size: 22),
                         onPressed: () async {
-                          final created = await Navigator.of(context).push<bool>(
-                            MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen()),
+                          final created = await Navigator.of(context).push<int>(
+                            MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen(type: 'offline')),
                           );
-                          if (created == true && mounted) setState(() {});
+                          if (created != null && mounted) {
+                            _navigateToPlaylist(created);
+                          }
                         },
                         tooltip: "Create Offline Playlist",
                         padding: EdgeInsets.zero,
@@ -1811,33 +2094,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _createPersonalPlaylist() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF111019),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text("Create Personal Playlist", style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: controller,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            hintText: "Playlist Name",
-            hintStyle: TextStyle(color: Colors.white30),
-            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF8B5CF6))),
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("Cancel", style: TextStyle(color: Colors.white54))),
-          TextButton(onPressed: () => Navigator.of(ctx).pop(controller.text.trim()), child: const Text("Create", style: TextStyle(color: Color(0xFF8B5CF6)))),
-        ],
-      ),
+    final created = await Navigator.of(context).push<int>(
+      MaterialPageRoute(builder: (_) => const CreateOfflinePlaylistScreen(type: 'personal')),
     );
-
-    if (name != null && name.isNotEmpty) {
-      await OfflineStorage().createPlaylist(name, type: 'personal');
-      if (mounted) setState(() {});
+    if (created != null && mounted) {
+      _navigateToPlaylist(created);
     }
   }
 
@@ -2140,54 +2401,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           
           const SizedBox(height: 16),
-          
-          // Log Out Button
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF111019),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withOpacity(0.06)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  "Logout",
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  "Disconnect from the current Sondra private server.",
-                  style: TextStyle(color: Colors.white60, fontSize: 13),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () async {
-                      await ApiService().logout();
-                      if (mounted) {
-                        Navigator.of(context).pushReplacement(
-                          MaterialPageRoute(builder: (_) => const SetupScreen()),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.redAccent.withOpacity(0.1),
-                      foregroundColor: Colors.redAccent,
-                      elevation: 0,
-                      side: BorderSide(color: Colors.redAccent.withOpacity(0.2)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    icon: const Icon(Icons.logout_rounded),
-                    label: const Text("Log Out"),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -2328,8 +2541,6 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
         : widget.songs.where((s) => PlaylistSearchBar.matchSong(s, query)).toList();
 
     final playerState = ref.watch(playerProvider);
-    final bottomPad = playerState.currentSong != null ? (Platform.isWindows ? 90.0 : 76.0) : 0.0;
-    final hasSong = playerState.currentSong != null;
 
     return Scaffold(
       backgroundColor: const Color(0xFF08070D),
@@ -2343,7 +2554,7 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
           children: [
             Expanded(
               child: ListView.builder(
-                padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 8),
+                padding: const EdgeInsets.only(left: 8, right: 8, top: 8, bottom: 8),
                 itemCount: filteredSongs.length + 1,
                 itemBuilder: (ctx, idx) {
                   if (idx == 0) {
@@ -2352,12 +2563,12 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
                       children: [
                         CommonPlaylistHeader(
                           name: widget.name,
-                          songCount: widget.songs.length,
+                          songCount: filteredSongs.length,
                           isShuffled: playerState.shuffle,
-                          onPlayAll: widget.songs.isEmpty
+                          onPlayAll: filteredSongs.isEmpty
                               ? null
                               : () {
-                                  ref.read(playerProvider.notifier).playSong(widget.songs.first, widget.songs, playlistName: widget.name);
+                                  ref.read(playerProvider.notifier).playSong(filteredSongs.first, filteredSongs, playlistName: widget.name);
                                 },
                           onToggleShuffle: () {
                             ref.read(playerProvider.notifier).toggleShuffle();
@@ -2419,7 +2630,7 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
                       }
                     },
                     child: ListTile(
-                      onTap: () => ref.read(playerProvider.notifier).playSong(s, widget.songs, playlistName: widget.name),
+                      onTap: () => ref.read(playerProvider.notifier).playSong(s, filteredSongs, playlistName: widget.name),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       leading: SongCoverWidget(
                         song: s,
@@ -2448,7 +2659,9 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
                               "${(s["duration_seconds"] ?? 0) ~/ 60}:${((s["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
                               style: const TextStyle(color: Colors.white30, fontSize: 11),
                             ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 6),
+                          SongDownloadIndicator(songId: s["id"]),
+                          const SizedBox(width: 6),
                           SongOptionsButton(song: s),
                         ],
                       ),
@@ -2457,22 +2670,6 @@ class _PlaylistDetailScreenState extends ConsumerState<_PlaylistDetailScreen> {
                 },
               ),
             ),
-            if (!Platform.isWindows && hasSong)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-                child: MiniPlayer(
-                  onTap: () {
-                    ref.read(showNowPlayingProvider.notifier).state = true;
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const NowPlayingScreen(),
-                      ),
-                    ).then((_) {
-                      ref.read(showNowPlayingProvider.notifier).state = false;
-                    });
-                  },
-                ),
-              ),
           ],
         ),
       ),
@@ -2536,12 +2733,12 @@ class _PlaylistDetailScreenInlineState extends ConsumerState<_PlaylistDetailScre
               children: [
                 CommonPlaylistHeader(
                   name: widget.name,
-                  songCount: widget.songs.length,
+                  songCount: filteredSongs.length,
                   isShuffled: playerState.shuffle,
-                  onPlayAll: widget.songs.isEmpty
+                  onPlayAll: filteredSongs.isEmpty
                       ? null
                       : () {
-                          ref.read(playerProvider.notifier).playSong(widget.songs.first, widget.songs, playlistName: widget.name);
+                          ref.read(playerProvider.notifier).playSong(filteredSongs.first, filteredSongs, playlistName: widget.name);
                         },
                   onToggleShuffle: () {
                     ref.read(playerProvider.notifier).toggleShuffle();
@@ -2603,7 +2800,7 @@ class _PlaylistDetailScreenInlineState extends ConsumerState<_PlaylistDetailScre
               }
             },
             child: ListTile(
-              onTap: () => ref.read(playerProvider.notifier).playSong(s, widget.songs, playlistName: widget.name),
+              onTap: () => ref.read(playerProvider.notifier).playSong(s, filteredSongs, playlistName: widget.name),
               contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               leading: SongCoverWidget(
                 song: s,
@@ -2632,7 +2829,9 @@ class _PlaylistDetailScreenInlineState extends ConsumerState<_PlaylistDetailScre
                       "${(s["duration_seconds"] ?? 0) ~/ 60}:${((s["duration_seconds"] ?? 0) % 60).toString().padLeft(2, '0')}",
                       style: const TextStyle(color: Colors.white30, fontSize: 11),
                     ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: 6),
+                  SongDownloadIndicator(songId: s["id"]),
+                  const SizedBox(width: 6),
                   SongOptionsButton(song: s),
                 ],
               ),
@@ -2719,9 +2918,14 @@ class NowPlayingScreen extends ConsumerWidget {
                   IconButton(
                     icon: const Icon(Icons.queue_music_rounded, color: Colors.white70, size: 22),
                     onPressed: () {
+                      ref.read(showNowPlayingProvider.notifier).state = false;
                       Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const QueueScreen()),
-                      );
+                      ).then((_) {
+                        if (context.mounted) {
+                          ref.read(showNowPlayingProvider.notifier).state = true;
+                        }
+                      });
                     },
                   ),
                 ],
@@ -3427,12 +3631,16 @@ class NowPlayingRightPanel extends ConsumerWidget {
 ### 6. `app/lib/screens/queue_screen.dart`
 [queue_screen.dart](file:///e:/PROJECT SONDRA/sondra/app/lib/screens/queue_screen.dart)
 ```dart
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/player_provider.dart';
 import '../widgets/song_cover.dart';
 import 'dart:io' show Platform;
 import '../widgets/song_options_menu.dart';
+import '../widgets/song_download_indicator.dart';
+import '../widgets/mini_player.dart';
+import 'now_playing_screen.dart';
 
 class QueueScreen extends ConsumerWidget {
   const QueueScreen({super.key});
@@ -3444,8 +3652,8 @@ class QueueScreen extends ConsumerWidget {
 
     final currentSong = playerState.currentSong;
     final manualQueue = playerState.queue;
+    final showNowPlaying = ref.watch(showNowPlayingProvider);
 
-    // Calculate the remaining songs in the playlist that will play next
     final remainingPlaylistSongs = <Map<String, dynamic>>[];
     if (currentSong != null && playerState.activePlaylist.isNotEmpty) {
       final currentIdx = playerState.activePlaylist.indexWhere((s) => s["id"] == currentSong["id"]);
@@ -3470,156 +3678,188 @@ class QueueScreen extends ConsumerWidget {
             ),
         ],
       ),
-      body: CustomScrollView(
-        slivers: [
-          // Section 1: Now Playing
-          if (currentSong != null) ...[
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.only(left: 16.0, right: 16.0, top: 16.0, bottom: 8.0),
-                child: Text("Now playing", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
-              ),
-            ),
-            SliverToBoxAdapter(
-              child: GestureDetector(
-                onSecondaryTapDown: (details) {
-                  if (Platform.isWindows) {
-                    SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, currentSong);
-                  }
-                },
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                  leading: SongCoverWidget(
-                    song: currentSong,
-                    width: 48,
-                    height: 48,
-                    borderRadius: 6.0,
-                  ),
-                  title: Text(
-                    currentSong["title"] ?? "Unknown Track",
-                    style: const TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: Text(
-                    currentSong["artist"] ?? "Unknown Artist",
-                    style: const TextStyle(color: Colors.white60, fontSize: 12),
-                  ),
-                  trailing: SongOptionsButton(song: currentSong),
-                ),
-              ),
-            ),
-          ],
-
-          // Section 2: Next In Queue (Manually added - Drag and Drop + Swipe to remove)
-          if (manualQueue.isNotEmpty) ...[
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.only(left: 16.0, right: 16.0, top: 24.0, bottom: 8.0),
-                child: Text("Next in Queue", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
-              ),
-            ),
-            SliverReorderableList(
-              itemCount: manualQueue.length,
-              onReorder: (oldIndex, newIndex) {
-                notifier.reorderQueue(oldIndex, newIndex);
-              },
-              itemBuilder: (context, index) {
-                final s = manualQueue[index];
-                return ReorderableDelayedDragStartListener(
-                  key: ValueKey("queue_${s['id']}_$index"),
-                  index: index,
-                  child: Dismissible(
-                    key: ValueKey("dismiss_${s['id']}_$index"),
-                    direction: DismissDirection.endToStart,
-                    onDismissed: (_) {
-                      notifier.removeFromQueue(index);
-                    },
-                    background: Container(
-                      color: Colors.redAccent.withOpacity(0.2),
-                      alignment: Alignment.centerRight,
-                      padding: const EdgeInsets.only(right: 24),
-                      child: const Icon(Icons.delete_rounded, color: Colors.redAccent),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: CustomScrollView(
+                slivers: [
+                  if (currentSong != null) ...[
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.only(left: 16.0, right: 16.0, top: 16.0, bottom: 8.0),
+                        child: Text("Now playing", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
+                      ),
                     ),
-                    child: GestureDetector(
-                      onSecondaryTapDown: (details) {
-                        if (Platform.isWindows) {
-                          SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, s, inQueue: true, queueIndex: index);
-                        }
+                    SliverToBoxAdapter(
+                      child: GestureDetector(
+                        onSecondaryTapDown: (details) {
+                          if (Platform.isWindows) {
+                            SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, currentSong);
+                          }
+                        },
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                          leading: SongCoverWidget(
+                            song: currentSong,
+                            width: 48,
+                            height: 48,
+                            borderRadius: 6.0,
+                          ),
+                          title: Text(
+                            currentSong["title"] ?? "Unknown Track",
+                            style: const TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: Text(
+                            currentSong["artist"] ?? "Unknown Artist",
+                            style: const TextStyle(color: Colors.white60, fontSize: 12),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SongDownloadIndicator(songId: currentSong["id"]),
+                              const SizedBox(width: 6),
+                              SongOptionsButton(song: currentSong),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (manualQueue.isNotEmpty) ...[
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.only(left: 16.0, right: 16.0, top: 24.0, bottom: 8.0),
+                        child: Text("Next in Queue", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                    SliverReorderableList(
+                      itemCount: manualQueue.length,
+                      onReorder: (oldIndex, newIndex) {
+                        notifier.reorderQueue(oldIndex, newIndex);
                       },
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                        leading: SongCoverWidget(
-                          song: s,
-                          width: 44,
-                          height: 44,
-                          borderRadius: 6.0,
-                        ),
-                        title: Text(
-                          s["title"] ?? "Unknown Track",
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
-                        ),
-                        subtitle: Text(
-                          s["artist"] ?? "Unknown Artist",
-                          style: const TextStyle(color: Colors.white38, fontSize: 11),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SongOptionsButton(song: s, inQueue: true, queueIndex: index),
-                            const SizedBox(width: 8),
-                            const Icon(Icons.drag_handle_rounded, color: Colors.white24),
-                          ],
-                        ),
+                      itemBuilder: (context, index) {
+                        final s = manualQueue[index];
+                        return ReorderableDelayedDragStartListener(
+                          key: ValueKey("queue_${s['id']}_$index"),
+                          index: index,
+                          child: Dismissible(
+                            key: ValueKey("dismiss_${s['id']}_$index"),
+                            direction: DismissDirection.endToStart,
+                            onDismissed: (_) {
+                              notifier.removeFromQueue(index);
+                            },
+                            background: Container(
+                              color: Colors.redAccent.withOpacity(0.2),
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.only(right: 24),
+                              child: const Icon(Icons.delete_rounded, color: Colors.redAccent),
+                            ),
+                            child: GestureDetector(
+                              onSecondaryTapDown: (details) {
+                                if (Platform.isWindows) {
+                                  SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, s, inQueue: true, queueIndex: index);
+                                }
+                              },
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                                leading: SongCoverWidget(
+                                  song: s,
+                                  width: 44,
+                                  height: 44,
+                                  borderRadius: 6.0,
+                                ),
+                                title: Text(
+                                  s["title"] ?? "Unknown Track",
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+                                ),
+                                subtitle: Text(
+                                  s["artist"] ?? "Unknown Artist",
+                                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SongDownloadIndicator(songId: s["id"]),
+                                    const SizedBox(width: 6),
+                                    SongOptionsButton(song: s, inQueue: true, queueIndex: index),
+                                    const SizedBox(width: 8),
+                                    const Icon(Icons.drag_handle_rounded, color: Colors.white24),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                  if (remainingPlaylistSongs.isNotEmpty) ...[
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.only(left: 16.0, right: 16.0, top: 24.0, bottom: 8.0),
+                        child: Text("Next up from active list", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
                       ),
                     ),
-                  ),
-                );
-              },
-            ),
-          ],
-
-          // Section 3: Next Up (Remaining songs from active playlist)
-          if (remainingPlaylistSongs.isNotEmpty) ...[
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.only(left: 16.0, right: 16.0, top: 24.0, bottom: 8.0),
-                child: Text("Next up from active list", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final s = remainingPlaylistSongs[index];
+                          return GestureDetector(
+                            onSecondaryTapDown: (details) {
+                              if (Platform.isWindows) {
+                                SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, s);
+                              }
+                            },
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                              leading: SongCoverWidget(
+                                song: s,
+                                width: 44,
+                                height: 44,
+                                borderRadius: 6.0,
+                              ),
+                              title: Text(
+                                s["title"] ?? "Unknown Track",
+                                style: const TextStyle(color: Colors.white60, fontSize: 14),
+                              ),
+                              subtitle: Text(
+                                s["artist"] ?? "Unknown Artist",
+                                style: const TextStyle(color: Colors.white38, fontSize: 11),
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SongDownloadIndicator(songId: s["id"]),
+                                  const SizedBox(width: 6),
+                                  SongOptionsButton(song: s),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                        childCount: remainingPlaylistSongs.length,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final s = remainingPlaylistSongs[index];
-                  return GestureDetector(
-                    onSecondaryTapDown: (details) {
-                      if (Platform.isWindows) {
-                        SongOptionsButton.showRightClickMenu(context, details.globalPosition, ref, s);
-                      }
-                    },
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                      leading: SongCoverWidget(
-                        song: s,
-                        width: 44,
-                        height: 44,
-                        borderRadius: 6.0,
-                      ),
-                      title: Text(
-                        s["title"] ?? "Unknown Track",
-                        style: const TextStyle(color: Colors.white60, fontSize: 14),
-                      ),
-                      subtitle: Text(
-                        s["artist"] ?? "Unknown Artist",
-                        style: const TextStyle(color: Colors.white38, fontSize: 11),
-                      ),
-                      trailing: SongOptionsButton(song: s),
+            if (!kIsWeb && Platform.isAndroid && currentSong != null && !showNowPlaying)
+              MiniPlayer(
+                onTap: () {
+                  ref.read(showNowPlayingProvider.notifier).state = true;
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const NowPlayingScreen(),
                     ),
-                  );
+                  ).then((_) {
+                    ref.read(showNowPlayingProvider.notifier).state = false;
+                  });
                 },
-                childCount: remainingPlaylistSongs.length,
               ),
-            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -3631,6 +3871,7 @@ class QueueScreen extends ConsumerWidget {
 ```dart
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/offline_storage.dart';
@@ -3638,11 +3879,12 @@ import '../services/download_manager.dart';
 import '../providers/player_provider.dart';
 import '../widgets/song_cover.dart';
 import '../widgets/song_options_menu.dart';
-import '../widgets/mini_player.dart';
-import 'now_playing_screen.dart';
-import '../services/api_service.dart';
+import '../widgets/song_download_indicator.dart';
 import '../widgets/playlist_search_bar.dart';
 import '../widgets/playlist_header.dart';
+import '../widgets/song_picker.dart';
+import '../widgets/mini_player.dart';
+import 'now_playing_screen.dart';
 
 class OfflinePlaylistScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> playlist;
@@ -3739,8 +3981,34 @@ class _OfflinePlaylistScreenState
   }
 
   Future<void> _deletePlaylist() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF111019),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Delete Playlist", style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Are you sure you want to delete "${_playlist['name']}"?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text("Delete", style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
-    await _downloadManager.deleteAllPlaylistFiles(songs);
+    if (_playlist['type'] == 'offline') {
+      await _downloadManager.deleteAllPlaylistFiles(songs);
+    }
     await OfflineStorage().deletePlaylist(_playlist['id'] as int);
     widget.onPlaylistChanged?.call();
     if (mounted) {
@@ -3752,10 +4020,9 @@ class _OfflinePlaylistScreenState
     }
   }
 
-  void _playSong(Map<String, dynamic> songEntry) {
-    final allSongs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
+  void _playSong(Map<String, dynamic> songEntry, List<Map<String, dynamic>> activeList) {
     final song = _buildSongMap(songEntry);
-    final playlist = allSongs.map((s) => _buildSongMap(s)).toList();
+    final playlist = activeList.map((s) => _buildSongMap(s)).toList();
     ref.read(playerProvider.notifier).playSong(song, playlist, playlistName: _playlist['name']);
   }
 
@@ -3788,7 +4055,6 @@ class _OfflinePlaylistScreenState
         : songs.where((s) => PlaylistSearchBar.matchSong(s, query)).toList();
 
     final playerState = ref.watch(playerProvider);
-    final bottomPad = playerState.currentSong != null ? (Platform.isWindows ? 90.0 : 76.0) : 0.0;
 
     return Scaffold(
       backgroundColor: const Color(0xFF08070D),
@@ -3808,7 +4074,7 @@ class _OfflinePlaylistScreenState
           children: [
             Expanded(
               child: ListView.builder(
-                padding: EdgeInsets.only(left: 8, right: 8, top: 8, bottom: bottomPad + 16),
+                padding: const EdgeInsets.only(left: 8, right: 8, top: 8, bottom: 16),
                 itemCount: filteredSongs.length + 1,
                 itemBuilder: (ctx, idx) {
                   if (idx == 0) {
@@ -3824,10 +4090,10 @@ class _OfflinePlaylistScreenState
                                   : OfflineStorage.formatBytes(snapshot.data ?? 0);
                               return CommonPlaylistHeader(
                                 name: _playlist['name'] ?? '',
-                                songCount: songs.length,
+                                songCount: filteredSongs.length,
                                 extraInfo: sizeStr,
                                 isShuffled: playerState.shuffle,
-                                onPlayAll: songs.isEmpty ? null : _playAll,
+                                onPlayAll: filteredSongs.isEmpty ? null : () => _playAll(filteredSongs),
                                 onToggleShuffle: () {
                                   ref.read(playerProvider.notifier).toggleShuffle();
                                 },
@@ -3844,34 +4110,32 @@ class _OfflinePlaylistScreenState
                                     });
                                   },
                                 ),
-                                trailingActions: Platform.isWindows
-                                    ? PopupMenuButton<String>(
-                                        icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
-                                        color: const Color(0xFF1C1A25),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                        onSelected: (value) async {
-                                          if (value == 'add') {
-                                            _showAddSongsSheet();
-                                          } else if (value == 'download_all') {
-                                            _downloadAll();
-                                          } else if (value == 'rename') {
-                                            _renamePlaylist();
-                                          } else if (value == 'delete') {
-                                            _deletePlaylist();
-                                          }
-                                        },
-                                        itemBuilder: (_) => _buildWindowsHeaderMenuItems(),
-                                      )
-                                    : null,
+                                trailingActions: PopupMenuButton<String>(
+                                  icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
+                                  color: const Color(0xFF1C1A25),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  onSelected: (value) async {
+                                    if (value == 'add') {
+                                      _showAddSongsSheet();
+                                    } else if (value == 'download_all') {
+                                      _downloadAll();
+                                    } else if (value == 'rename') {
+                                      _renamePlaylist();
+                                    } else if (value == 'delete') {
+                                      _deletePlaylist();
+                                    }
+                                  },
+                                  itemBuilder: (_) => _buildHeaderMenuItems(),
+                                ),
                               );
                             },
                           )
                         else
                           CommonPlaylistHeader(
                             name: _playlist['name'] ?? '',
-                            songCount: songs.length,
+                            songCount: filteredSongs.length,
                             isShuffled: playerState.shuffle,
-                            onPlayAll: songs.isEmpty ? null : _playAll,
+                            onPlayAll: filteredSongs.isEmpty ? null : () => _playAll(filteredSongs),
                             onToggleShuffle: () {
                               ref.read(playerProvider.notifier).toggleShuffle();
                             },
@@ -3888,23 +4152,21 @@ class _OfflinePlaylistScreenState
                                 });
                               },
                             ),
-                            trailingActions: Platform.isWindows
-                                ? PopupMenuButton<String>(
-                                    icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
-                                    color: const Color(0xFF1C1A25),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                    onSelected: (value) async {
-                                      if (value == 'add') {
-                                        _showAddSongsSheet();
-                                      } else if (value == 'rename') {
-                                        _renamePlaylist();
-                                      } else if (value == 'delete') {
-                                        _deletePlaylist();
-                                      }
-                                    },
-                                    itemBuilder: (_) => _buildWindowsHeaderMenuItems(),
-                                  )
-                                : null,
+                            trailingActions: PopupMenuButton<String>(
+                              icon: const Icon(Icons.more_horiz_rounded, color: Colors.white70),
+                              color: const Color(0xFF1C1A25),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              onSelected: (value) async {
+                                if (value == 'add') {
+                                  _showAddSongsSheet();
+                                } else if (value == 'rename') {
+                                  _renamePlaylist();
+                                } else if (value == 'delete') {
+                                  _deletePlaylist();
+                                }
+                              },
+                              itemBuilder: (_) => _buildHeaderMenuItems(),
+                            ),
                           ),
                         if (songs.isEmpty)
                           const Padding(
@@ -3928,12 +4190,10 @@ class _OfflinePlaylistScreenState
                               ),
                             ),
                           ),
-                      ],
+                          ],
                     );
                   }
                   final entry = filteredSongs[idx - 1];
-                  final status = entry['status'] as String? ?? 'notDownloaded';
-                  final progress = (entry['progress'] as num?)?.toDouble() ?? 0.0;
                   final songId = entry['song_id'] as int;
                   final isCurrent = playerState.currentSong?['id'] == songId;
 
@@ -3952,7 +4212,7 @@ class _OfflinePlaylistScreenState
                       }
                     },
                     child: ListTile(
-                      onTap: () => _playSong(entry),
+                      onTap: () => _playSong(entry, filteredSongs),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       leading: SongCoverWidget(
                         song: _buildSongMap(entry),
@@ -3976,27 +4236,45 @@ class _OfflinePlaylistScreenState
                         children: [
                           if (isCurrent && playerState.isPlaying)
                             const Icon(Icons.equalizer_rounded, color: Color(0xFF8B5CF6), size: 20)
-                          else ...[
-                            if (status == 'downloading')
-                              SizedBox(
-                                width: 16, height: 16,
-                                child: CircularProgressIndicator(
-                                  value: progress,
-                                  strokeWidth: 2,
-                                  color: const Color(0xFF10B981),
-                                ),
-                              )
-                            else if (status == 'completed')
-                              const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 16)
-                            else if (status == 'error')
-                              const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 16)
-                            else
-                              Text(
-                                "${(entry['duration_seconds'] ?? 0) ~/ 60}:${((entry['duration_seconds'] ?? 0) % 60).toString().padLeft(2, '0')}",
-                                style: const TextStyle(color: Colors.white30, fontSize: 11),
+                          else
+                            Text(
+                              "${(entry['duration_seconds'] ?? 0) ~/ 60}:${((entry['duration_seconds'] ?? 0) % 60).toString().padLeft(2, '0')}",
+                              style: const TextStyle(color: Colors.white30, fontSize: 11),
+                            ),
+                          const SizedBox(width: 6),
+                          SongDownloadIndicator(songId: songId),
+                          const SizedBox(width: 6),
+                          if ((_playlist['type'] == 'personal' || _playlist['type'] == 'offline') && _searchQuery.isEmpty) ...[
+                            if (idx - 1 > 0)
+                              IconButton(
+                                icon: const Icon(Icons.keyboard_arrow_up_rounded, color: Colors.white38, size: 20),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () async {
+                                  await OfflineStorage().reorderSong(
+                                    _playlist['id'] as int,
+                                    idx - 1,
+                                    idx - 2,
+                                  );
+                                  _refreshPlaylist();
+                                },
                               ),
+                            if (idx - 1 < songs.length - 1)
+                              IconButton(
+                                icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white38, size: 20),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () async {
+                                  await OfflineStorage().reorderSong(
+                                    _playlist['id'] as int,
+                                    idx - 1,
+                                    idx,
+                                  );
+                                  _refreshPlaylist();
+                                },
+                              ),
+                            const SizedBox(width: 4),
                           ],
-                          const SizedBox(width: 4),
                           SongOptionsButton(
                             song: _buildSongMap(entry),
                             playlistId: _playlist['id'],
@@ -4010,21 +4288,23 @@ class _OfflinePlaylistScreenState
                 },
               ),
             ),
-            if (!Platform.isWindows && playerState.currentSong != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-                child: MiniPlayer(
-                  onTap: () {
-                    ref.read(showNowPlayingProvider.notifier).state = true;
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const NowPlayingScreen(),
-                      ),
-                    ).then((_) {
-                      ref.read(showNowPlayingProvider.notifier).state = false;
-                    });
-                  },
-                ),
+            if (!kIsWeb && Platform.isAndroid && playerState.currentSong != null)
+              Consumer(
+                builder: (ctx, ref, _) {
+                  if (ref.watch(showNowPlayingProvider)) return const SizedBox.shrink();
+                  return MiniPlayer(
+                    onTap: () {
+                      ref.read(showNowPlayingProvider.notifier).state = true;
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const NowPlayingScreen(),
+                        ),
+                      ).then((_) {
+                        if (ctx.mounted) ref.read(showNowPlayingProvider.notifier).state = false;
+                      });
+                    },
+                  );
+                },
               ),
           ],
         ),
@@ -4032,12 +4312,7 @@ class _OfflinePlaylistScreenState
     );
   }
 
-  List<PopupMenuEntry<String>> _buildWindowsHeaderMenuItems() {
-    final isOffline = _playlist['type'] == 'offline';
-    final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
-    final hasPendingDownloads = songs.any((s) => s['status'] == 'downloading');
-    final hasNotDownloaded = songs.any((s) => s['status'] == 'notDownloaded');
-
+  List<PopupMenuEntry<String>> _buildHeaderMenuItems() {
     return [
       const PopupMenuItem(
         value: 'add',
@@ -4048,24 +4323,6 @@ class _OfflinePlaylistScreenState
           contentPadding: EdgeInsets.zero,
         ),
       ),
-      if (isOffline && hasNotDownloaded)
-        PopupMenuItem(
-          value: 'download_all',
-          enabled: !hasPendingDownloads,
-          child: ListTile(
-            leading: Icon(
-              hasPendingDownloads ? Icons.hourglass_empty_rounded : Icons.download_rounded,
-              color: const Color(0xFF8B5CF6),
-              size: 20,
-            ),
-            title: Text(
-              hasPendingDownloads ? "Downloading..." : "Download All",
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-            ),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
       const PopupMenuItem(
         value: 'rename',
         child: ListTile(
@@ -4087,10 +4344,9 @@ class _OfflinePlaylistScreenState
     ];
   }
 
-  void _playAll() {
-    final songs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
-    if (songs.isEmpty) return;
-    _playSong(songs.first);
+  void _playAll(List<Map<String, dynamic>> activeList) {
+    if (activeList.isEmpty) return;
+    _playSong(activeList.first, activeList);
   }
 
 
@@ -4098,129 +4354,78 @@ class _OfflinePlaylistScreenState
     final scaffoldContext = context;
     final currentSongs = List<Map<String, dynamic>>.from(_playlist['songs'] ?? []);
     final currentIds = currentSongs.map((s) => s['song_id'] as int).toSet();
-    final selectedSongs = <Map<String, dynamic>>[];
+    final pickerKey = GlobalKey<SongPickerWidgetState>();
 
-    await showModalBottomSheet<List<Map<String, dynamic>>>(
+    await showModalBottomSheet<Map<String, dynamic>>(
       context: scaffoldContext,
       backgroundColor: const Color(0xFF111019),
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setSheetState) {
-            return FutureBuilder<List<dynamic>>(
-              future: ApiService().getSongs(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const SizedBox(
-                    height: 200,
-                    child: Center(
-                      child: CircularProgressIndicator(color: Color(0xFF8B5CF6)),
-                    ),
-                  );
-                }
-                if (snapshot.hasError || !snapshot.hasData) {
-                  return const SizedBox(
-                    height: 200,
-                    child: Center(
-                      child: Text("Error fetching songs", style: TextStyle(color: Colors.white54)),
-                    ),
-                  );
-                }
-
-                final allSongs = List<Map<String, dynamic>>.from(snapshot.data!);
-                return Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            "Add Songs to Playlist",
-                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                          ),
-                          ElevatedButton(
-                            onPressed: selectedSongs.isEmpty
-                                ? null
-                                : () {
-                                    Navigator.of(ctx).pop(selectedSongs);
-                                  },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF8B5CF6),
-                              foregroundColor: Colors.white,
-                              disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
-                            ),
-                            child: const Text("Add"),
-                          ),
-                        ],
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(ctx).size.height * 0.85,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        "Add Songs to Playlist",
+                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                       ),
-                    ),
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: allSongs.length,
-                        itemBuilder: (context, idx) {
-                          final song = allSongs[idx];
-                          final songId = song['id'] as int;
-                          final isAlreadyIn = currentIds.contains(songId);
-                          final isSelected = selectedSongs.any((s) => s['id'] == songId);
-
-                          return ListTile(
-                            leading: SongCoverWidget(
-                              song: song,
-                              width: 40,
-                              height: 40,
-                              borderRadius: 4.0,
-                            ),
-                            title: Text(
-                              song['title'] ?? 'Unknown Track',
-                              style: TextStyle(
-                                color: isAlreadyIn ? Colors.white30 : Colors.white,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            subtitle: Text(
-                              song['artist'] ?? 'Unknown Artist',
-                              style: TextStyle(
-                                color: isAlreadyIn ? Colors.white24 : Colors.white38,
-                                fontSize: 12,
-                              ),
-                            ),
-                            trailing: isAlreadyIn
-                                ? const Icon(Icons.check_circle_rounded, color: Colors.white24)
-                                : Checkbox(
-                                    value: isSelected,
-                                    activeColor: const Color(0xFF8B5CF6),
-                                    onChanged: (val) {
-                                      setSheetState(() {
-                                        if (val == true) {
-                                          selectedSongs.add(song);
-                                        } else {
-                                          selectedSongs.removeWhere((s) => s['id'] == songId);
-                                        }
-                                      });
-                                    },
-                                  ),
-                          );
+                      ElevatedButton(
+                        onPressed: () {
+                          final selected = pickerKey.currentState?.selectedSongs ?? [];
+                          Navigator.of(ctx).pop(<String, dynamic>{
+                            'songs': selected,
+                          });
                         },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF8B5CF6),
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: const Color(0xFF8B5CF6).withValues(alpha: 0.3),
+                        ),
+                        child: const Text("Add"),
                       ),
-                    ),
-                  ],
-                );
-              },
-            );
-          },
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: SongPickerWidget(
+                    key: pickerKey,
+                    disabledIds: currentIds,
+                  ),
+                ),
+              ],
+            ),
+          ),
         );
       },
     ).then((res) async {
-      if (res != null && res.isNotEmpty) {
+      if (res != null) {
+        final songs = List<Map<String, dynamic>>.from(res['songs'] as List);
+        if (songs.isEmpty) return;
         final storage = OfflineStorage();
-        await storage.addSongsToPlaylist(_playlist['id'] as int, res);
+        await storage.addSongsToPlaylist(_playlist['id'] as int, songs);
         
         if (_playlist['type'] == 'offline') {
-          for (final song in res) {
-            await _downloadManager.downloadSong(_playlist['id'] as int, song);
+          final updatedPl = storage.getPlaylist(_playlist['id'] as int);
+          if (updatedPl != null) {
+            final updatedSongs = List<Map<String, dynamic>>.from(updatedPl['songs'] ?? []);
+            for (final song in songs) {
+              try {
+                final entry = updatedSongs.firstWhere((s) => s['song_id'] == song['id']);
+                // Don't await in a loop or else it blocks the UI thread/refresh, launch async
+                _downloadManager.downloadSong(_playlist['id'] as int, entry);
+              } catch (e) {
+                print("Failed to find added song entry: $e");
+              }
+            }
           }
         }
         _refreshPlaylist();
@@ -4235,12 +4440,15 @@ class _OfflinePlaylistScreenState
 ```dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../services/api_service.dart';
 import '../services/offline_storage.dart';
-import '../widgets/song_cover.dart';
+import '../widgets/song_picker.dart';
+
+import '../services/download_manager.dart';
 
 class CreateOfflinePlaylistScreen extends ConsumerStatefulWidget {
-  const CreateOfflinePlaylistScreen({super.key});
+  final String type;
+
+  const CreateOfflinePlaylistScreen({super.key, this.type = 'offline'});
 
   @override
   ConsumerState<CreateOfflinePlaylistScreen> createState() =>
@@ -4250,53 +4458,46 @@ class CreateOfflinePlaylistScreen extends ConsumerStatefulWidget {
 class _CreateOfflinePlaylistScreenState
     extends ConsumerState<CreateOfflinePlaylistScreen> {
   final _nameController = TextEditingController();
-  final Set<int> _selectedSongIds = {};
-  List<Map<String, dynamic>> _allSongs = [];
-  bool _loadingSongs = true;
+  final _songPickerKey = GlobalKey<SongPickerWidgetState>();
   bool _creating = false;
+  bool _showSongPicker = false;
+
+  String get _typeLabel => widget.type == 'personal' ? 'Personal' : 'Offline';
 
   @override
   void initState() {
     super.initState();
     _nameController.addListener(() => setState(() {}));
-    _loadSongs();
   }
 
-  Future<void> _loadSongs() async {
-    try {
-      final songs = await ApiService().getSongs();
-      if (mounted) {
-        setState(() {
-          _allSongs = List<Map<String, dynamic>>.from(songs);
-          _loadingSongs = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loadingSongs = false;
-        });
+  Future<void> _onSongsConfirmed(List<Map<String, dynamic>> selectedSongs) async {
+    if (_creating) return;
+    setState(() => _creating = true);
+
+    final name = _nameController.text.trim();
+    final storage = OfflineStorage();
+    final playlist = await storage.createPlaylist(name, type: widget.type);
+    if (selectedSongs.isNotEmpty) {
+      await storage.addSongsToPlaylist(playlist['id'] as int, selectedSongs);
+
+      if (widget.type == 'offline') {
+        final updatedPl = storage.getPlaylist(playlist['id'] as int);
+        if (updatedPl != null) {
+          final updatedSongs = List<Map<String, dynamic>>.from(updatedPl['songs'] ?? []);
+          for (final song in selectedSongs) {
+            try {
+              final entry = updatedSongs.firstWhere((s) => s['song_id'] == song['id']);
+              DownloadManager().downloadSong(playlist['id'] as int, entry);
+            } catch (e) {
+              print("Failed to download song on playlist init: $e");
+            }
+          }
+        }
       }
     }
-  }
-
-  Future<void> _createPlaylist() async {
-    final name = _nameController.text.trim();
-    if (name.isEmpty) return;
-
-    setState(() {
-      _creating = true;
-    });
-
-    final selectedSongs =
-        _allSongs.where((s) => _selectedSongIds.contains(s['id'])).toList();
-
-    final storage = OfflineStorage();
-    final playlist = await storage.createPlaylist(name, type: 'offline');
-    await storage.addSongsToPlaylist(playlist['id'] as int, selectedSongs);
 
     if (mounted) {
-      Navigator.of(context).pop(true);
+      Navigator.of(context).pop(playlist['id'] as int);
     }
   }
 
@@ -4313,11 +4514,19 @@ class _CreateOfflinePlaylistScreenState
       appBar: AppBar(
         backgroundColor: const Color(0xFF111019),
         foregroundColor: Colors.white,
-        title: const Text('Create Offline Playlist',
-            style: TextStyle(color: Colors.white)),
+        title: Text(
+          _showSongPicker ? 'Select Songs' : 'Create $_typeLabel Playlist',
+          style: const TextStyle(color: Colors.white),
+        ),
         elevation: 0,
       ),
-      body: Column(
+      body: _showSongPicker ? _buildSongPicker() : _buildNameStep(),
+    );
+  }
+
+  Widget _buildNameStep() {
+    return SafeArea(
+      child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -4338,98 +4547,72 @@ class _CreateOfflinePlaylistScreenState
                   borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
                 ),
               ),
+              autofocus: true,
+            ),
+          ),
+          const Spacer(),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _nameController.text.trim().isEmpty ? null : () {
+                  setState(() => _showSongPicker = true);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF8B5CF6),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text('Next', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSongPicker() {
+    return SafeArea(
+      child: Column(
+        children: [
+          Expanded(
+            child: SongPickerWidget(
+              key: _songPickerKey,
+              showLoading: true,
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Select Songs (${_selectedSongIds.length})',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+            padding: const EdgeInsets.all(16),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _creating
+                    ? null
+                    : () {
+                        final selected = _songPickerKey.currentState?.selectedSongs ?? [];
+                        _onSongsConfirmed(selected);
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF8B5CF6),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                ElevatedButton(
-                  onPressed:
-                      _nameController.text.trim().isEmpty || _selectedSongIds.isEmpty || _creating
-                          ? null
-                          : _createPlaylist,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF8B5CF6),
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor:
-                        const Color(0xFF8B5CF6).withOpacity(0.3),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 20, vertical: 10),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                  ),
-                  child: _creating
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Text('Create'),
-                ),
-              ],
+                child: _creating
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text('Create Playlist', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: _loadingSongs
-                ? const Center(
-                    child: CircularProgressIndicator(
-                        color: Color(0xFF8B5CF6)))
-                : ListView.builder(
-                    itemCount: _allSongs.length,
-                    itemBuilder: (context, index) {
-                      final song = _allSongs[index];
-                      final isSelected =
-                          _selectedSongIds.contains(song['id']);
-                      return ListTile(
-                        onTap: () {
-                          setState(() {
-                            if (isSelected) {
-                              _selectedSongIds.remove(song['id']);
-                            } else {
-                              _selectedSongIds.add(song['id'] as int);
-                            }
-                          });
-                        },
-                        leading: SongCoverWidget(
-                          song: song,
-                          width: 40,
-                          height: 40,
-                          borderRadius: 4.0,
-                        ),
-                        title: Text(
-                          song['title'] ?? 'Unknown Track',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500),
-                        ),
-                        subtitle: Text(
-                          song['artist'] ?? 'Unknown Artist',
-                          style:
-                              const TextStyle(color: Colors.white38, fontSize: 12),
-                        ),
-                        trailing: Icon(
-                          isSelected
-                              ? Icons.check_circle_rounded
-                              : Icons.radio_button_unchecked_rounded,
-                          color: isSelected
-                              ? const Color(0xFF8B5CF6)
-                              : Colors.white24,
-                        ),
-                      );
-                    },
-                  ),
           ),
         ],
       ),
@@ -4444,7 +4627,6 @@ class _CreateOfflinePlaylistScreenState
 import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   final Dio dio = Dio();
@@ -4452,6 +4634,11 @@ class ApiService {
   String? token;
   StreamController<Map<String, dynamic>> sseController = StreamController.broadcast();
   StreamSubscription? sseSubscription;
+
+  // Hardcoded admin credentials for auto-login (Android + Windows).
+  // Change these if your backend admin password changes, then rebuild.
+  static const String _adminUsername = "shriram";
+  static const String _adminPassword = "nopassword";
 
   static final ApiService _instance = ApiService._internal();
   factory ApiService() => _instance;
@@ -4464,9 +4651,19 @@ class ApiService {
         return handler.next(options);
       },
       onError: (DioException e, handler) async {
-        if (e.response?.statusCode == 401) {
-          // Token expired or invalid
-          await logout();
+        // Don't retry the login endpoint itself — that would cause an infinite
+        // loop if the hardcoded credentials happen to be wrong or change.
+        if (e.response?.statusCode == 401 && !e.requestOptions.path.contains('/auth/login')) {
+          // Transparently re-login and retry (Android + Windows)
+          final success = await _autoLogin();
+          if (success) {
+            e.requestOptions.headers["Authorization"] = "Bearer $token";
+            try {
+              final retryResponse = await dio.fetch(e.requestOptions);
+              handler.resolve(retryResponse);
+              return;
+            } catch (_) {}
+          }
         }
         return handler.next(e);
       },
@@ -4474,45 +4671,33 @@ class ApiService {
   }
 
   Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
     baseUrl = "https://sondra-backend-cxkc.onrender.com";
-    token = prefs.getString("sondra_token");
     dio.options.baseUrl = baseUrl!;
-    if (token != null) {
-      startSseConnection();
-    }
+
+    // Both Android and Windows: auto-login silently with hardcoded credentials
+    // No SharedPreferences token storage, no user-facing auth
+    await _autoLogin();
   }
 
-  Future<bool> login(String username, String password) async {
-    String cleanUrl = "https://sondra-backend-cxkc.onrender.com";
-    
+  /// Silently authenticates on startup and on 401 — both platforms.
+  Future<bool> _autoLogin() async {
     try {
       final response = await dio.post(
-        "$cleanUrl/auth/login",
-        data: {"username": username, "password": password},
+        "/auth/login/form",
+        data: {"username": _adminUsername, "password": _adminPassword},
+        options: Options(contentType: Headers.formUrlEncodedContentType),
       );
-      
-      final String jwtToken = response.data["access_token"];
-      
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString("sondra_server_url", cleanUrl);
-      await prefs.setString("sondra_token", jwtToken);
-      
-      baseUrl = cleanUrl;
-      token = jwtToken;
-      dio.options.baseUrl = cleanUrl;
-      
+      token = response.data["access_token"];
       startSseConnection();
       return true;
     } catch (e) {
-      print("Login failed: $e");
+      print("Auto-login failed: $e");
+      token = null;
       return false;
     }
   }
 
   Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove("sondra_token");
     token = null;
     sseSubscription?.cancel();
   }
@@ -4564,11 +4749,6 @@ class ApiService {
     return res.data;
   }
 
-  Future<List<dynamic>> getSongsSearch(String query) async {
-    final res = await dio.get("/api/songs/search", queryParameters: {"q": query});
-    return res.data;
-  }
-
   Future<List<dynamic>> getPlaylists() async {
     final res = await dio.get("/api/playlists");
     return res.data;
@@ -4579,21 +4759,11 @@ class ApiService {
     return res.data;
   }
 
-  Future<List<dynamic>> getHistoryContinue() async {
-    final res = await dio.get("/api/history/continue");
-    return res.data;
-  }
-
   Future<void> logHistory(int songId, int positionSeconds) async {
     await dio.post("/api/history", data: {
       "song_id": songId,
       "position_seconds": positionSeconds,
     });
-  }
-
-  Future<String> getDirectStreamUrl(int songId) async {
-    final res = await dio.get("/api/stream/$songId");
-    return res.data["stream_url"];
   }
 
   Future<String> getDownloadUrl(int songId) async {
@@ -4622,15 +4792,24 @@ import 'package:smtc_windows/smtc_windows.dart';
 import 'package:audio_session/audio_session.dart';
 
 class SondraAudioHandler extends BaseAudioHandler {
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player = AudioPlayer(
+    audioLoadConfiguration: const AudioLoadConfiguration(
+      androidLoadControl: AndroidLoadControl(
+        minBufferDuration: Duration(seconds: 15),
+        maxBufferDuration: Duration(seconds: 50),
+        bufferForPlaybackDuration: Duration(milliseconds: 1000),
+        bufferForPlaybackAfterRebufferDuration: Duration(seconds: 5),
+      ),
+    ),
+  );
   SMTCWindows? _smtc;
   Future<void>? _initFuture;
-  bool _isLoading = false;
-  DateTime? _lastSmtcAction;
-
   // Callbacks hooked by the Riverpod notifier
   Future<void> Function()? onSkipToNext;
   Future<void> Function()? onSkipToPrevious;
+  void Function(bool)? onPlayingChanged;
+  double _preInterruptionVolume = 0.8;
+  bool _ignoreSmtcEvents = false;
 
   SondraAudioHandler() {
     // Forward playback states from just_audio to audio_service
@@ -4651,9 +4830,62 @@ class SondraAudioHandler extends BaseAudioHandler {
   }
 
   Future<void> _initAudioSession() async {
+    if (kIsWeb || !Platform.isAndroid) return;
     try {
       final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration.music());
+      await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playback,
+        avAudioSessionMode: AVAudioSessionMode.defaultMode,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.music,
+          usage: AndroidAudioUsage.media,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransientMayDuck,
+        androidWillPauseWhenDucked: false,
+      ));
+
+      bool interrupted = false;
+      bool ducked = false;
+
+      session.interruptionEventStream.listen((event) async {
+        if (event.begin) {
+          switch (event.type) {
+            case AudioInterruptionType.duck:
+              _preInterruptionVolume = _player.volume;
+              await _player.setVolume(_preInterruptionVolume * 0.3);
+              ducked = true;
+              break;
+            case AudioInterruptionType.pause:
+              await pause();
+              interrupted = true;
+              break;
+            case AudioInterruptionType.unknown:
+              break;
+          }
+        } else {
+          switch (event.type) {
+            case AudioInterruptionType.duck:
+              if (ducked) {
+                await _player.setVolume(_preInterruptionVolume);
+                await play();
+                ducked = false;
+              }
+              break;
+            case AudioInterruptionType.pause:
+              if (interrupted) {
+                await play();
+                interrupted = false;
+              }
+              break;
+            case AudioInterruptionType.unknown:
+              break;
+          }
+        }
+      });
+
+      session.becomingNoisyEventStream.listen((event) async {
+        await pause();
+      });
     } catch (e) {
       print("AudioSession configuration failed: $e");
     }
@@ -4662,15 +4894,20 @@ class SondraAudioHandler extends BaseAudioHandler {
   void _initWindowsSmtc() {
     _smtc = SMTCWindows();
     
-    // Listen to button press streams
+    // Explicitly enable next and previous buttons on the SMTC.
+    // The default SMTCConfig has nextEnabled/prevEnabled=true, but
+    // the system needs an explicit update to register them as active.
+    _smtc!.setIsNextEnabled(true);
+    _smtc!.setIsPrevEnabled(true);
+    _smtc!.setIsPlayEnabled(true);
+    _smtc!.setIsPauseEnabled(true);
+
+    // Listen to button press streams from the system
     _smtc!.buttonPressStream.listen((event) async {
-      final now = DateTime.now();
-      if (_lastSmtcAction != null && 
-          now.difference(_lastSmtcAction!) < const Duration(milliseconds: 600)) {
+      if (_ignoreSmtcEvents) {
+        print("Ignoring SMTC event during active programmatic transition: $event");
         return;
       }
-      _lastSmtcAction = now;
-
       switch (event) {
         case PressedButton.play:
           play();
@@ -4679,21 +4916,14 @@ class SondraAudioHandler extends BaseAudioHandler {
           pause();
           break;
         case PressedButton.next:
-          skipToNext();
+          click(MediaButton.next);
           break;
         case PressedButton.previous:
-          skipToPrevious();
+          click(MediaButton.previous);
           break;
         default:
           break;
       }
-    });
-
-    // Keep SMTC playback status in sync with player playing state
-    _player.playingStream.listen((playing) {
-      _smtc?.setPlaybackStatus(
-        playing ? PlaybackStatus.Playing : PlaybackStatus.Paused
-      );
     });
 
     // Keep SMTC timeline in sync with player position/duration
@@ -4708,60 +4938,57 @@ class SondraAudioHandler extends BaseAudioHandler {
     });
   }
 
-  Future<void> playUri(String uri, MediaItem item) async {
-    if (_isLoading) {
-      try {
-        await _player.stop();
-      } catch (_) {}
+  void setSmtcPlaying(bool playing) {
+    if (_smtc != null) {
+      _smtc!.setPlaybackStatus(
+        playing ? PlaybackStatus.Playing : PlaybackStatus.Paused
+      );
+      _smtc!.setIsNextEnabled(true);
+      _smtc!.setIsPrevEnabled(true);
+      _smtc!.setIsPlayEnabled(true);
+      _smtc!.setIsPauseEnabled(true);
     }
-    _isLoading = true;
+  }
+
+  Future<void> playUri(String uri, MediaItem item, {bool autoPlay = true}) async {
+    final isWindows = !kIsWeb && Platform.isWindows;
+    if (isWindows) {
+      _ignoreSmtcEvents = true;
+    }
     try {
       await ensureInitialized();
-    mediaItem.add(item);
 
-    // Update SMTC Metadata on Windows
-    if (_smtc != null) {
-      _smtc!.setTitle(item.title);
-      _smtc!.setArtist(item.artist ?? "Unknown Artist");
-      if (item.album != null) {
-        _smtc!.setAlbum(item.album!);
+      mediaItem.add(item);
+
+      if (_smtc != null) {
+        _smtc!.setTitle(item.title);
+        _smtc!.setArtist(item.artist ?? "Unknown Artist");
+        if (item.album != null) {
+          _smtc!.setAlbum(item.album!);
+        }
       }
-    }
 
-    try {
-      // Check if this is a local file path (starts with / on Android or a drive letter on Windows)
       final isLocalFilePath = uri.startsWith('/') || 
-          (uri.length > 2 && uri[1] == ':'); // Windows drive path like C:\...
+          (uri.length > 2 && uri[1] == ':');
       
       if (!kIsWeb && Platform.isAndroid) {
-        // Android-specific: prevent cache collision and metadata mismatch
         if (isLocalFilePath) {
           await _player.setAudioSource(
-            AudioSource.file(
-              uri,
-              tag: item,
-            ),
+            AudioSource.file(uri, tag: item),
           );
         } else {
           final parsedUri = Uri.parse(uri);
           if (parsedUri.scheme == 'file') {
             await _player.setAudioSource(
-              AudioSource.file(
-                parsedUri.toFilePath(),
-                tag: item,
-              ),
+              AudioSource.file(parsedUri.toFilePath(), tag: item),
             );
           } else {
             await _player.setAudioSource(
-              AudioSource.uri(
-                parsedUri,
-                tag: item,
-              ),
+              AudioSource.uri(parsedUri, tag: item),
             );
           }
         }
       } else {
-        // Other platforms (Windows, etc.): do not modify existing behavior
         if (isLocalFilePath) {
           await _player.setAudioSource(AudioSource.file(uri));
         } else {
@@ -4770,23 +4997,46 @@ class SondraAudioHandler extends BaseAudioHandler {
             await _player.setAudioSource(AudioSource.file(parsedUri.toFilePath()));
           } else {
             await _player.setAudioSource(
-              AudioSource.uri(
-                parsedUri,
-                tag: item,
-              ),
+              AudioSource.uri(parsedUri, tag: item),
             );
           }
         }
       }
-      _player.play();
-    } finally {
-      _isLoading = false;
-    }
+      if (isWindows && autoPlay) {
+        await _player.play();
+        if (_smtc != null) {
+          _smtc!.setPlaybackStatus(PlaybackStatus.Playing);
+        }
+      }
+      if (autoPlay) {
+        if (!isWindows) {
+          if (_player.processingState != ProcessingState.ready) {
+            await _player.processingStateStream.firstWhere(
+              (state) => state == ProcessingState.ready || state == ProcessingState.idle,
+            ).timeout(const Duration(seconds: 15));
+          }
+          if (_player.processingState == ProcessingState.idle) {
+            throw Exception("Audio source failed to load");
+          }
+          await _player.play();
+          if (!_player.playing) {
+            await _player.playingStream.firstWhere((playing) => playing);
+          }
+        }
+        playbackState.add(_transformEvent(_player.playbackEvent));
+        onPlayingChanged?.call(true);
+      }
     } catch (e) {
       print("Audio player setSource error: $e");
       playbackState.add(playbackState.value.copyWith(
         errorMessage: e.toString(),
       ));
+    } finally {
+      if (isWindows) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          _ignoreSmtcEvents = false;
+        });
+      }
     }
   }
 
@@ -4805,13 +5055,42 @@ class SondraAudioHandler extends BaseAudioHandler {
   }
 
   @override
-  Future<void> play() async {
-    await ensureInitialized();
-    await _player.play();
+  Future<void> click([MediaButton button = MediaButton.media]) async {
+    switch (button) {
+      case MediaButton.media:
+        if (playbackState.value.playing) {
+          await pause();
+        } else {
+          await play();
+        }
+        break;
+      case MediaButton.next:
+        await skipToNext();
+        break;
+      case MediaButton.previous:
+        await skipToPrevious();
+        break;
+    }
   }
 
   @override
-  Future<void> pause() => _player.pause();
+  Future<void> play() async {
+    await ensureInitialized();
+    await _player.play();
+    if (!_player.playing) {
+      await _player.playingStream.firstWhere((playing) => playing);
+    }
+    onPlayingChanged?.call(true);
+  }
+
+  @override
+  Future<void> pause() async {
+    await _player.pause();
+    if (_player.playing) {
+      await _player.playingStream.firstWhere((playing) => !playing);
+    }
+    onPlayingChanged?.call(false);
+  }
 
   @override
   Future<void> seek(Duration position) => _player.seek(position);
@@ -4872,6 +5151,10 @@ import '../services/api_service.dart';
 import '../services/offline_storage.dart';
 
 class DownloadManager {
+  static final DownloadManager _instance = DownloadManager._();
+  factory DownloadManager() => _instance;
+  DownloadManager._();
+
   final ApiService _api = ApiService();
   final Map<String, CancelToken> _activeDownloads = {};
   final StreamController<Map<String, dynamic>> _progressController =
@@ -4886,61 +5169,136 @@ class DownloadManager {
     final songEntryId = songEntry['id'] as int;
     final songId = songEntry['song_id'] as int;
     final dlDir = await OfflineStorage().downloadsDir;
+    
+    // Verify downloads directory is created before downloading
+    final directory = Directory(dlDir);
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+    
     final filePath = p.join(dlDir, '$songId.mp3');
-
-    final url = '${_api.baseUrl}/api/stream/$songId/proxy?token=${_api.token}';
     final cancelToken = CancelToken();
     _activeDownloads[songId.toString()] = cancelToken;
 
     final storage = OfflineStorage();
 
-    try {
-      await storage.updateSongStatus(playlistId, songEntryId, 'downloading',
-          progress: 0.0);
+    int attempts = 0;
+    const maxAttempts = 3;
+    bool success = false;
 
-      await _api.dio.download(
-        url,
-        filePath,
-        onReceiveProgress: (received, total) {
-          final progress = total != -1 ? received / total : 0.0;
-          storage.updateSongStatus(playlistId, songEntryId, 'downloading',
-              progress: progress);
+    // Set initial status in storage & progress stream
+    await storage.updateSongStatus(playlistId, songEntryId, 'downloading', progress: 0.0);
+    _progressController.add({
+      'playlistId': playlistId,
+      'songEntryId': songEntryId,
+      'songId': songId,
+      'status': 'downloading',
+      'progress': 0.0,
+    });
+
+    while (attempts < maxAttempts && !success) {
+      attempts++;
+      print("Download attempt $attempts of $maxAttempts for song $songId. Destination: $filePath");
+      
+      try {
+        if (attempts > 1) {
+          print("Refreshing credentials before retry...");
+          await _api.init(); // Re-authenticates and refreshes the token on Render
+        }
+
+        final url = '${_api.baseUrl}/api/stream/$songId/proxy?token=${_api.token}';
+        print("Download request details: URL=$url, method=GET, headers={Authorization: Bearer ${_api.token}}");
+
+        await _api.dio.download(
+          url,
+          filePath,
+          onReceiveProgress: (received, total) {
+            final progress = total != -1 ? (received / total).clamp(0.0, 1.0) : 0.0;
+            storage.updateSongStatus(playlistId, songEntryId, 'downloading', progress: progress);
+            _progressController.add({
+              'playlistId': playlistId,
+              'songEntryId': songEntryId,
+              'songId': songId,
+              'status': 'downloading',
+              'progress': progress,
+            });
+          },
+          cancelToken: cancelToken,
+        );
+
+        final file = File(filePath);
+        final exists = await file.exists();
+        final size = exists ? await file.length() : 0;
+        print("File existence check after download: path=$filePath, exists=$exists, size=$size bytes");
+
+        if (exists && size > 0) {
+          success = true;
+          print("Download verified successfully on attempt $attempts. Size: $size bytes.");
+
+          await storage.updateSongStatus(playlistId, songEntryId, 'completed',
+              filePath: filePath, progress: 1.0);
           _progressController.add({
             'playlistId': playlistId,
             'songEntryId': songEntryId,
             'songId': songId,
-            'status': 'downloading',
-            'progress': progress,
+            'status': 'completed',
+            'progress': 1.0,
           });
-        },
-        cancelToken: cancelToken,
-      );
+        } else {
+          // If it exists but is 0 bytes, delete it
+          if (exists) {
+            await file.delete();
+          }
+          throw Exception("Downloaded file is empty or missing on disk.");
+        }
+      } on DioException catch (e) {
+        print("DioException on attempt $attempts for song $songId: type=${e.type}, message=${e.message}, statusCode=${e.response?.statusCode}");
+        
+        if (e.type == DioExceptionType.cancel) {
+          print("Download cancelled by user.");
+          await storage.updateSongStatus(playlistId, songEntryId, 'notDownloaded', progress: 0.0);
+          _progressController.add({
+            'playlistId': playlistId,
+            'songEntryId': songEntryId,
+            'songId': songId,
+            'status': 'notDownloaded',
+            'progress': 0.0,
+          });
+          break; // Don't retry if cancelled
+        }
 
-      await storage.updateSongStatus(playlistId, songEntryId, 'completed',
-          filePath: filePath, progress: 1.0);
-      _progressController.add({
-        'playlistId': playlistId,
-        'songEntryId': songEntryId,
-        'songId': songId,
-        'status': 'completed',
-        'progress': 1.0,
-      });
-    } on DioException catch (e) {
-      if (e.type == DioExceptionType.cancel) {
-        await storage.updateSongStatus(playlistId, songEntryId, 'notDownloaded',
-            progress: 0.0);
-      } else {
-        print('Download failed for song $songId: $e');
-        await storage.updateSongStatus(playlistId, songEntryId, 'notDownloaded',
-            progress: 0.0);
+        if (attempts >= maxAttempts) {
+          await storage.updateSongStatus(playlistId, songEntryId, 'notDownloaded', progress: 0.0);
+          _progressController.add({
+            'playlistId': playlistId,
+            'songEntryId': songEntryId,
+            'songId': songId,
+            'status': 'notDownloaded',
+            'progress': 0.0,
+          });
+        } else {
+          // Wait and retry
+          await Future.delayed(Duration(seconds: 2 * attempts));
+        }
+      } catch (e) {
+        print("General Exception on attempt $attempts for song $songId: $e");
+        if (attempts >= maxAttempts) {
+          await storage.updateSongStatus(playlistId, songEntryId, 'notDownloaded', progress: 0.0);
+          _progressController.add({
+            'playlistId': playlistId,
+            'songEntryId': songEntryId,
+            'songId': songId,
+            'status': 'notDownloaded',
+            'progress': 0.0,
+          });
+        } else {
+          // Wait and retry
+          await Future.delayed(Duration(seconds: 2 * attempts));
+        }
       }
-    } catch (e) {
-      print('Download error for song $songId: $e');
-      await storage.updateSongStatus(playlistId, songEntryId, 'notDownloaded',
-          progress: 0.0);
-    } finally {
-      _activeDownloads.remove(songId.toString());
     }
+
+    _activeDownloads.remove(songId.toString());
   }
 
   void cancelDownload(int songId) {
@@ -4972,7 +5330,7 @@ class DownloadManager {
   }
 
   void dispose() {
-    _progressController.close();
+    // Keep broadcast controller alive as this is a singleton
   }
 }
 ```
@@ -5019,16 +5377,18 @@ class OfflineStorage {
 
   Future<String> get downloadsDir async {
     try {
-      final dir = await getApplicationSupportDirectory();
+      final dir = await getApplicationDocumentsDirectory();
+      print("Resolved getApplicationDocumentsDirectory() path: ${dir.path}");
       final dl = Directory(p.join(dir.path, 'sondra_downloads'));
       if (!await dl.exists()) {
         await dl.create(recursive: true);
       }
       return dl.path;
     } catch (e) {
-      print("Failed to use application support directory for downloads, using temporary directory: $e");
-      final tempDir = await getTemporaryDirectory();
-      final dl = Directory(p.join(tempDir.path, 'sondra_downloads'));
+      print("Failed to use application documents directory for downloads: $e");
+      final fallbackDir = await getApplicationDocumentsDirectory();
+      print("Resolved fallback getApplicationDocumentsDirectory() path: ${fallbackDir.path}");
+      final dl = Directory(p.join(fallbackDir.path, 'sondra_downloads'));
       if (!await dl.exists()) {
         await dl.create(recursive: true);
       }
@@ -5096,6 +5456,18 @@ class OfflineStorage {
     };
   }
 
+  String getSongDownloadStatus(int songId) {
+    for (final pl in _playlists) {
+      final songs = List<Map<String, dynamic>>.from(pl['songs'] ?? []);
+      for (final s in songs) {
+        if (s['song_id'] == songId) {
+          return s['status'] ?? 'notDownloaded';
+        }
+      }
+    }
+    return 'notDownloaded';
+  }
+
   Future<void> addSongsToPlaylist(int playlistId, List<Map<String, dynamic>> songs) async {
     final idx = _playlists.indexWhere((p) => p['id'] == playlistId);
     if (idx == -1) return;
@@ -5144,13 +5516,65 @@ class OfflineStorage {
     await _save();
   }
 
-  Future<void> deleteSong(int playlistId, int songEntryId) async {
-    final plIdx = _playlists.indexWhere((p) => p['id'] == playlistId);
+  Future<void> deleteSong(int playlistId, int targetId) async {
+    final file = await _playlistsFile;
+    if (!await file.exists()) return;
+    final content = await file.readAsString();
+    if (content.isEmpty) return;
+
+    // 1. Load the playlist JSON
+    final List<dynamic> playlistsJson = jsonDecode(content);
+
+    // 2. Find the target playlist and remove only the specific song by song_id or id
+    final plIdx = playlistsJson.indexWhere((p) => p['id'] == playlistId);
     if (plIdx == -1) return;
-    final songs = List<Map<String, dynamic>>.from(_playlists[plIdx]['songs'] ?? []);
-    songs.removeWhere((s) => s['id'] == songEntryId);
-    _playlists[plIdx]['songs'] = songs;
-    await _save();
+
+    final songs = List<Map<String, dynamic>>.from(playlistsJson[plIdx]['songs'] ?? []);
+    final initialLength = songs.length;
+
+    // Find the song entry to get its song_id
+    Map<String, dynamic>? songEntry;
+    for (final s in songs) {
+      if (s['song_id'] == targetId || s['id'] == targetId) {
+        songEntry = s;
+        break;
+      }
+    }
+    if (songEntry != null) {
+      final songId = songEntry['song_id'] ?? targetId;
+      final dlDir = await downloadsDir;
+      final localFile = File(p.join(dlDir, '$songId.mp3'));
+      if (await localFile.exists()) {
+        await localFile.delete();
+        if (await localFile.exists()) {
+          throw Exception("Failed to delete local audio file for song $songId");
+        }
+      }
+    }
+
+    songs.removeWhere((s) => s['song_id'] == targetId || s['id'] == targetId);
+
+    // 3. Write back the modified playlist without touching others
+    playlistsJson[plIdx]['songs'] = songs;
+    await file.writeAsString(jsonEncode(playlistsJson));
+
+    // 4. Verification step
+    final verifyContent = await file.readAsString();
+    final List<dynamic> verifyList = jsonDecode(verifyContent);
+    final verifyPl = verifyList.firstWhere((p) => p['id'] == playlistId, orElse: () => null);
+    if (verifyPl == null) {
+      throw Exception("Verification failed: Playlist no longer exists");
+    }
+    final verifySongs = List<dynamic>.from(verifyPl['songs'] ?? []);
+    if (verifySongs.length != initialLength - 1) {
+      throw Exception("Verification failed: expected ${initialLength - 1} songs, but found ${verifySongs.length}");
+    }
+    if (verifySongs.any((s) => s['song_id'] == targetId || s['id'] == targetId)) {
+      throw Exception("Verification failed: target song was not removed");
+    }
+
+    // 5. Keep the in-memory array cache in sync
+    _playlists = List<Map<String, dynamic>>.from(playlistsJson);
   }
 
   Future<void> reorderSong(int playlistId, int fromIndex, int toIndex) async {
@@ -5386,8 +5810,6 @@ class MiniPlayer extends ConsumerStatefulWidget {
 }
 
 class _MiniPlayerState extends ConsumerState<MiniPlayer> {
-  bool _isFavorited = false;
-
   String _formatDuration(Duration d) {
     final mins = d.inMinutes;
     final secs = d.inSeconds % 60;
@@ -5569,19 +5991,6 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                     ],
                   ),
                 ),
-                const SizedBox(width: 4),
-                IconButton(
-                  icon: Icon(
-                    _isFavorited ? Icons.favorite_rounded : Icons.favorite_outline_rounded,
-                    color: _isFavorited ? const Color(0xFF8B5CF6) : Colors.white38,
-                    size: 18,
-                  ),
-                  onPressed: () => setState(() => _isFavorited = !_isFavorited),
-                  tooltip: _isFavorited ? "Remove from Favorites" : "Add to Favorites",
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  splashRadius: 16,
-                ),
               ],
             ),
           ),
@@ -5664,17 +6073,24 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                       Expanded(
                         child: SliderTheme(
                           data: SliderTheme.of(context).copyWith(
-                            trackHeight: 4,
-                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                            trackHeight: 2,
+                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
+                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
                             activeTrackColor: const Color(0xFF8B5CF6),
                             inactiveTrackColor: Colors.white12,
                             thumbColor: const Color(0xFF8B5CF6),
                           ),
                           child: Slider(
                             min: 0.0,
-                            max: playerState.duration.inMilliseconds.toDouble(),
-                            value: playerState.position.inMilliseconds.toDouble().clamp(0.0, playerState.duration.inMilliseconds.toDouble()),
+                            max: playerState.duration.inMilliseconds > 0
+                                ? playerState.duration.inMilliseconds.toDouble()
+                                : 1.0,
+                            value: playerState.position.inMilliseconds.toDouble().clamp(
+                                  0.0,
+                                  playerState.duration.inMilliseconds > 0
+                                      ? playerState.duration.inMilliseconds.toDouble()
+                                      : 1.0,
+                                ),
                             onChanged: (value) => notifier.seek(Duration(milliseconds: value.toInt())),
                           ),
                         ),
@@ -5796,13 +6212,15 @@ class SongCoverWidget extends StatelessWidget {
       );
     }
 
-    final coverUrl = "${ApiService().baseUrl}/api/songs/${song["id"]}/cover?v=${song["id"]}";
+    final baseUrl = ApiService().baseUrl ?? "";
+    final coverUrl = "$baseUrl/api/songs/${song["id"]}/cover?v=${song["id"]}";
 
+    final host = Uri.tryParse(baseUrl)?.host ?? "";
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
       child: CachedNetworkImage(
         imageUrl: coverUrl,
-        cacheKey: "song_cover_${song["id"]}",
+        cacheKey: "song_cover_${host}_${song["id"]}",
         width: width,
         height: height,
         fit: BoxFit.cover,
@@ -5894,6 +6312,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/player_provider.dart';
+import '../providers/downloads_provider.dart';
 import '../services/offline_storage.dart';
 import '../services/download_manager.dart';
 
@@ -5989,6 +6408,48 @@ class SongOptionsButton extends ConsumerWidget {
   }
 
   List<PopupMenuEntry<void>> _buildMenuItems(BuildContext context, WidgetRef ref, {required bool isWindows}) {
+    final playlist = playlistId != null ? OfflineStorage().getPlaylist(playlistId!) : null;
+    final isOfflinePlaylist = playlist != null && playlist['type'] == 'offline';
+
+    if (isOfflinePlaylist) {
+      final songId = song['id'] as int;
+      return [
+        _popupItem(
+          icon: Icons.play_arrow_rounded,
+          title: "Play Now",
+          onTap: () {
+            ref.read(playerProvider.notifier).playSong(song, [song]);
+          },
+        ),
+        _popupItem(
+          icon: Icons.playlist_play_rounded,
+          title: "Play Next",
+          onTap: () {
+            ref.read(playerProvider.notifier).playNext(song);
+          },
+        ),
+        _popupItem(
+          icon: Icons.queue_music_rounded,
+          title: "Add to Queue",
+          onTap: () {
+            ref.read(playerProvider.notifier).addToQueue(song);
+          },
+        ),
+        _popupItem(
+          icon: Icons.playlist_remove_rounded,
+          title: "Remove from Offline Playlist",
+          color: Colors.redAccent,
+          onTap: () async {
+            await OfflineStorage().deleteSong(playlistId!, songId);
+            ref.read(downloadsProvider.notifier).refresh();
+            if (onPlaylistChanged != null) {
+              onPlaylistChanged!();
+            }
+          },
+        ),
+      ];
+    }
+
     return [
       _popupItem(
         icon: Icons.play_arrow_rounded,
@@ -6025,24 +6486,10 @@ class SongOptionsButton extends ConsumerWidget {
         title: "Download for Offline",
         onTap: () {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showPlaylistSelectionDialog(context, type: 'offline');
+            _showOfflinePlaylistBottomSheet(context, ref);
           });
         },
       ),
-      if (song['local_file_path'] != null && (song['local_file_path'] as String).isNotEmpty)
-        _popupItem(
-          icon: Icons.delete_outline_rounded,
-          title: "Remove Local Download",
-          color: Colors.redAccent,
-          onTap: () async {
-            final songId = song['id'] as int;
-            await DownloadManager().deleteDownloadedFile(songId);
-            await OfflineStorage().removeSongDownload(songId);
-            if (onPlaylistChanged != null) {
-              onPlaylistChanged!();
-            }
-          },
-        ),
       if (inQueue && queueIndex != null)
         _popupItem(
           icon: Icons.remove_circle_outline_rounded,
@@ -6050,18 +6497,6 @@ class SongOptionsButton extends ConsumerWidget {
           color: Colors.redAccent,
           onTap: () {
             ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
-          },
-        ),
-      if (playlistId != null && songEntryId != null)
-        _popupItem(
-          icon: Icons.playlist_remove_rounded,
-          title: "Remove from Playlist",
-          color: Colors.redAccent,
-          onTap: () async {
-            await OfflineStorage().deleteSong(playlistId!, songEntryId!);
-            if (onPlaylistChanged != null) {
-              onPlaylistChanged!();
-            }
           },
         ),
     ];
@@ -6094,6 +6529,9 @@ class SongOptionsButton extends ConsumerWidget {
   }
 
   void _showAndroidBottomSheet(BuildContext context, WidgetRef ref) {
+    final playlist = playlistId != null ? OfflineStorage().getPlaylist(playlistId!) : null;
+    final isOfflinePlaylist = playlist != null && playlist['type'] == 'offline';
+
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF111019),
@@ -6134,84 +6572,97 @@ class SongOptionsButton extends ConsumerWidget {
                 ),
               ),
               const Divider(color: Colors.white10),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.play_arrow_rounded,
-                title: "Play Now",
-                onTap: () {
-                  ref.read(playerProvider.notifier).playSong(song, [song]);
-                },
-              ),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.playlist_play_rounded,
-                title: "Play Next",
-                onTap: () {
-                  ref.read(playerProvider.notifier).playNext(song);
-                },
-              ),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.queue_music_rounded,
-                title: "Add to Queue",
-                onTap: () {
-                  ref.read(playerProvider.notifier).addToQueue(song);
-                },
-              ),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.playlist_add_rounded,
-                title: "Add to Personal Playlist",
-                onTap: () {
-                  _showPlaylistSelectionDialog(context, type: 'personal');
-                },
-              ),
-              _bottomSheetItem(
-                context: ctx,
-                icon: Icons.download_for_offline_rounded,
-                title: "Download for Offline",
-                onTap: () {
-                  _showPlaylistSelectionDialog(context, type: 'offline');
-                },
-              ),
-              if (song['local_file_path'] != null && (song['local_file_path'] as String).isNotEmpty)
+              if (isOfflinePlaylist) ...[
                 _bottomSheetItem(
                   context: ctx,
-                  icon: Icons.delete_outline_rounded,
-                  title: "Remove Local Download",
-                  color: Colors.redAccent,
-                  onTap: () async {
-                    final songId = song['id'] as int;
-                    await DownloadManager().deleteDownloadedFile(songId);
-                    await OfflineStorage().removeSongDownload(songId);
-                    if (onPlaylistChanged != null) {
-                      onPlaylistChanged!();
-                    }
-                  },
-                ),
-              if (inQueue && queueIndex != null)
-                _bottomSheetItem(
-                  context: ctx,
-                  icon: Icons.remove_circle_outline_rounded,
-                  title: "Remove from Queue",
-                  color: Colors.redAccent,
+                  icon: Icons.play_arrow_rounded,
+                  title: "Play Now",
                   onTap: () {
-                    ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
+                    ref.read(playerProvider.notifier).playSong(song, [song]);
                   },
                 ),
-              if (playlistId != null && songEntryId != null)
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.playlist_play_rounded,
+                  title: "Play Next",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).playNext(song);
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.queue_music_rounded,
+                  title: "Add to Queue",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).addToQueue(song);
+                  },
+                ),
                 _bottomSheetItem(
                   context: ctx,
                   icon: Icons.playlist_remove_rounded,
-                  title: "Remove from Playlist",
+                  title: "Remove from Offline Playlist",
                   color: Colors.redAccent,
                   onTap: () async {
-                    await OfflineStorage().deleteSong(playlistId!, songEntryId!);
+                    final songId = song['id'] as int;
+                    await OfflineStorage().deleteSong(playlistId!, songId);
+                    ref.read(downloadsProvider.notifier).refresh();
                     if (onPlaylistChanged != null) {
                       onPlaylistChanged!();
                     }
                   },
                 ),
+              ] else ...[
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.play_arrow_rounded,
+                  title: "Play Now",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).playSong(song, [song]);
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.playlist_play_rounded,
+                  title: "Play Next",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).playNext(song);
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.queue_music_rounded,
+                  title: "Add to Queue",
+                  onTap: () {
+                    ref.read(playerProvider.notifier).addToQueue(song);
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.playlist_add_rounded,
+                  title: "Add to Personal Playlist",
+                  onTap: () {
+                    _showPlaylistSelectionDialog(context, type: 'personal');
+                  },
+                ),
+                _bottomSheetItem(
+                  context: ctx,
+                  icon: Icons.download_for_offline_rounded,
+                  title: "Download for Offline",
+                  onTap: () {
+                    _showOfflinePlaylistBottomSheet(context, ref);
+                  },
+                ),
+                if (inQueue && queueIndex != null)
+                  _bottomSheetItem(
+                    context: ctx,
+                    icon: Icons.remove_circle_outline_rounded,
+                    title: "Remove from Queue",
+                    color: Colors.redAccent,
+                    onTap: () {
+                      ref.read(playerProvider.notifier).removeFromQueue(queueIndex!);
+                    },
+                  ),
+              ],
               const SizedBox(height: 12),
             ],
           ),
@@ -6389,6 +6840,158 @@ class SongOptionsButton extends ConsumerWidget {
           backgroundColor: const Color(0xFF8B5CF6),
         ),
       );
+    }
+  }
+
+  void _showOfflinePlaylistBottomSheet(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF111019),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
+        ),
+      ),
+      builder: (ctx) {
+        final storage = OfflineStorage();
+        final playlists = storage.getPlaylists().where((p) => p['type'] == 'offline').toList();
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text(
+                  "Save to Offline Playlist",
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const Divider(color: Colors.white10, height: 1),
+              if (playlists.isNotEmpty)
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: playlists.length,
+                    itemBuilder: (context, idx) {
+                      final pl = playlists[idx];
+                      final songsCount = (pl['songs'] as List?)?.length ?? 0;
+                      return ListTile(
+                        leading: const Icon(Icons.offline_pin_rounded, color: Color(0xFF8B5CF6)),
+                        title: Text(pl['name'] ?? 'Unnamed', style: const TextStyle(color: Colors.white)),
+                        subtitle: Text("$songsCount ${songsCount == 1 ? 'song' : 'songs'}", style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        onTap: () async {
+                          Navigator.of(ctx).pop();
+                          await _handleAddToExistingPlaylist(context, ref, pl['id'] as int, pl['name'] ?? 'Playlist');
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ListTile(
+                leading: const Icon(Icons.add_rounded, color: Color(0xFF8B5CF6)),
+                title: const Text("Create New Offline Playlist", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await _handleCreateNewOfflinePlaylist(context, ref);
+                },
+              ),
+              const Divider(color: Colors.white10, height: 1),
+              ListTile(
+                leading: const Icon(Icons.close_rounded, color: Colors.white54),
+                title: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+                onTap: () => Navigator.of(ctx).pop(),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _handleAddToExistingPlaylist(BuildContext context, WidgetRef ref, int playlistId, String playlistName) async {
+    final storage = OfflineStorage();
+    final pl = storage.getPlaylist(playlistId);
+    if (pl == null) return;
+
+    final songs = List<Map<String, dynamic>>.from(pl['songs'] ?? []);
+    final exists = songs.any((s) => s['song_id'] == song['id']);
+    
+    if (exists) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Already in $playlistName"),
+            backgroundColor: const Color(0xFF8B5CF6),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Add song to playlist immediately
+    await storage.addSongsToPlaylist(playlistId, [song]);
+
+    // Start download immediately
+    final updatedPl = storage.getPlaylist(playlistId);
+    if (updatedPl != null) {
+      final updatedSongs = List<Map<String, dynamic>>.from(updatedPl['songs'] ?? []);
+      final entry = updatedSongs.firstWhere((s) => s['song_id'] == song['id']);
+      
+      // Refresh downloads notifier to pick up the new downloading status
+      ref.read(downloadsProvider.notifier).refresh();
+      
+      // Start download background task
+      DownloadManager().downloadSong(playlistId, entry).then((_) {
+        ref.read(downloadsProvider.notifier).refresh();
+      });
+    }
+
+    if (onPlaylistChanged != null) {
+      onPlaylistChanged!();
+    }
+  }
+
+  Future<void> _handleCreateNewOfflinePlaylist(BuildContext context, WidgetRef ref) async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF111019),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("New Offline Playlist", style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: "Playlist Name",
+            hintStyle: TextStyle(color: Colors.white30),
+            focusedBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF8B5CF6)),
+            ),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text("Create", style: TextStyle(color: Color(0xFF8B5CF6))),
+          ),
+        ],
+      ),
+    );
+
+    if (name != null && name.isNotEmpty) {
+      final pl = await OfflineStorage().createPlaylist(name, type: 'offline');
+      if (context.mounted) {
+        await _handleAddToExistingPlaylist(context, ref, pl['id'] as int, name);
+      }
     }
   }
 }
@@ -8026,7 +8629,7 @@ async def stream_song_proxy(
         # Set up response headers
         resp_headers = {
             "Accept-Ranges": "bytes",
-            "Cache-Control": "no-cache",
+            "Cache-Control": "private, max-age=3600",
         }
         if "content-range" in response.headers:
             resp_headers["Content-Range"] = response.headers["content-range"]

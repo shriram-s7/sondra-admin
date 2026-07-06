@@ -21,6 +21,9 @@ class SondraAudioHandler extends BaseAudioHandler {
   // Callbacks hooked by the Riverpod notifier
   Future<void> Function()? onSkipToNext;
   Future<void> Function()? onSkipToPrevious;
+  void Function(bool)? onPlayingChanged;
+  double _preInterruptionVolume = 0.8;
+  bool _ignoreSmtcEvents = false;
 
   SondraAudioHandler() {
     // Forward playback states from just_audio to audio_service
@@ -41,16 +44,62 @@ class SondraAudioHandler extends BaseAudioHandler {
   }
 
   Future<void> _initAudioSession() async {
+    if (kIsWeb || !Platform.isAndroid) return;
     try {
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playback,
+        avAudioSessionMode: AVAudioSessionMode.defaultMode,
         androidAudioAttributes: AndroidAudioAttributes(
           contentType: AndroidAudioContentType.music,
           usage: AndroidAudioUsage.media,
         ),
-        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
-        androidWillPauseWhenDucked: true,
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransientMayDuck,
+        androidWillPauseWhenDucked: false,
       ));
+
+      bool interrupted = false;
+      bool ducked = false;
+
+      session.interruptionEventStream.listen((event) async {
+        if (event.begin) {
+          switch (event.type) {
+            case AudioInterruptionType.duck:
+              _preInterruptionVolume = _player.volume;
+              await _player.setVolume(_preInterruptionVolume * 0.3);
+              ducked = true;
+              break;
+            case AudioInterruptionType.pause:
+              await pause();
+              interrupted = true;
+              break;
+            case AudioInterruptionType.unknown:
+              break;
+          }
+        } else {
+          switch (event.type) {
+            case AudioInterruptionType.duck:
+              if (ducked) {
+                await _player.setVolume(_preInterruptionVolume);
+                await play();
+                ducked = false;
+              }
+              break;
+            case AudioInterruptionType.pause:
+              if (interrupted) {
+                await play();
+                interrupted = false;
+              }
+              break;
+            case AudioInterruptionType.unknown:
+              break;
+          }
+        }
+      });
+
+      session.becomingNoisyEventStream.listen((event) async {
+        await pause();
+      });
     } catch (e) {
       print("AudioSession configuration failed: $e");
     }
@@ -69,6 +118,10 @@ class SondraAudioHandler extends BaseAudioHandler {
 
     // Listen to button press streams from the system
     _smtc!.buttonPressStream.listen((event) async {
+      if (_ignoreSmtcEvents) {
+        print("Ignoring SMTC event during active programmatic transition: $event");
+        return;
+      }
       switch (event) {
         case PressedButton.play:
           play();
@@ -87,13 +140,6 @@ class SondraAudioHandler extends BaseAudioHandler {
       }
     });
 
-    // Keep SMTC playback status in sync with player playing state
-    _player.playingStream.listen((playing) {
-      _smtc?.setPlaybackStatus(
-        playing ? PlaybackStatus.Playing : PlaybackStatus.Paused
-      );
-    });
-
     // Keep SMTC timeline in sync with player position/duration
     _player.positionStream.listen((pos) {
       _smtc?.setPosition(pos);
@@ -106,23 +152,36 @@ class SondraAudioHandler extends BaseAudioHandler {
     });
   }
 
-  Future<void> playUri(String uri, MediaItem item) async {
-    // No stop() needed — setAudioSource handles internal source replacement.
-    // Note: _isLoading was removed because it is unused when there is no stop gate.
-    await ensureInitialized();
-
-    mediaItem.add(item);
-
-    // Update SMTC Metadata on Windows
+  void setSmtcPlaying(bool playing) {
     if (_smtc != null) {
-      _smtc!.setTitle(item.title);
-      _smtc!.setArtist(item.artist ?? "Unknown Artist");
-      if (item.album != null) {
-        _smtc!.setAlbum(item.album!);
-      }
+      _smtc!.setPlaybackStatus(
+        playing ? PlaybackStatus.Playing : PlaybackStatus.Paused
+      );
+      _smtc!.setIsNextEnabled(true);
+      _smtc!.setIsPrevEnabled(true);
+      _smtc!.setIsPlayEnabled(true);
+      _smtc!.setIsPauseEnabled(true);
     }
+  }
 
+  Future<void> playUri(String uri, MediaItem item, {bool autoPlay = true}) async {
+    final isWindows = !kIsWeb && Platform.isWindows;
+    if (isWindows) {
+      _ignoreSmtcEvents = true;
+    }
     try {
+      await ensureInitialized();
+
+      mediaItem.add(item);
+
+      if (_smtc != null) {
+        _smtc!.setTitle(item.title);
+        _smtc!.setArtist(item.artist ?? "Unknown Artist");
+        if (item.album != null) {
+          _smtc!.setAlbum(item.album!);
+        }
+      }
+
       final isLocalFilePath = uri.startsWith('/') || 
           (uri.length > 2 && uri[1] == ':');
       
@@ -157,12 +216,41 @@ class SondraAudioHandler extends BaseAudioHandler {
           }
         }
       }
-      await _player.play();
+      if (isWindows && autoPlay) {
+        await _player.play();
+        if (_smtc != null) {
+          _smtc!.setPlaybackStatus(PlaybackStatus.Playing);
+        }
+      }
+      if (autoPlay) {
+        if (!isWindows) {
+          if (_player.processingState != ProcessingState.ready) {
+            await _player.processingStateStream.firstWhere(
+              (state) => state == ProcessingState.ready || state == ProcessingState.idle,
+            ).timeout(const Duration(seconds: 15));
+          }
+          if (_player.processingState == ProcessingState.idle) {
+            throw Exception("Audio source failed to load");
+          }
+          await _player.play();
+          if (!_player.playing) {
+            await _player.playingStream.firstWhere((playing) => playing);
+          }
+        }
+        playbackState.add(_transformEvent(_player.playbackEvent));
+        onPlayingChanged?.call(true);
+      }
     } catch (e) {
       print("Audio player setSource error: $e");
       playbackState.add(playbackState.value.copyWith(
         errorMessage: e.toString(),
       ));
+    } finally {
+      if (isWindows) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          _ignoreSmtcEvents = false;
+        });
+      }
     }
   }
 
@@ -203,10 +291,20 @@ class SondraAudioHandler extends BaseAudioHandler {
   Future<void> play() async {
     await ensureInitialized();
     await _player.play();
+    if (!_player.playing) {
+      await _player.playingStream.firstWhere((playing) => playing);
+    }
+    onPlayingChanged?.call(true);
   }
 
   @override
-  Future<void> pause() => _player.pause();
+  Future<void> pause() async {
+    await _player.pause();
+    if (_player.playing) {
+      await _player.playingStream.firstWhere((playing) => !playing);
+    }
+    onPlayingChanged?.call(false);
+  }
 
   @override
   Future<void> seek(Duration position) => _player.seek(position);

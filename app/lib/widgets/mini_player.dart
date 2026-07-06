@@ -13,8 +13,6 @@ class MiniPlayer extends ConsumerStatefulWidget {
 }
 
 class _MiniPlayerState extends ConsumerState<MiniPlayer> {
-  bool _isFavorited = false;
-
   String _formatDuration(Duration d) {
     final mins = d.inMinutes;
     final secs = d.inSeconds % 60;
@@ -196,19 +194,6 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                     ],
                   ),
                 ),
-                const SizedBox(width: 4),
-                IconButton(
-                  icon: Icon(
-                    _isFavorited ? Icons.favorite_rounded : Icons.favorite_outline_rounded,
-                    color: _isFavorited ? const Color(0xFF8B5CF6) : Colors.white38,
-                    size: 18,
-                  ),
-                  onPressed: () => setState(() => _isFavorited = !_isFavorited),
-                  tooltip: _isFavorited ? "Remove from Favorites" : "Add to Favorites",
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  splashRadius: 16,
-                ),
               ],
             ),
           ),
@@ -291,17 +276,24 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
                       Expanded(
                         child: SliderTheme(
                           data: SliderTheme.of(context).copyWith(
-                            trackHeight: 4,
-                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                            trackHeight: 2,
+                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
+                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
                             activeTrackColor: const Color(0xFF8B5CF6),
                             inactiveTrackColor: Colors.white12,
                             thumbColor: const Color(0xFF8B5CF6),
                           ),
                           child: Slider(
                             min: 0.0,
-                            max: playerState.duration.inMilliseconds.toDouble(),
-                            value: playerState.position.inMilliseconds.toDouble().clamp(0.0, playerState.duration.inMilliseconds.toDouble()),
+                            max: playerState.duration.inMilliseconds > 0
+                                ? playerState.duration.inMilliseconds.toDouble()
+                                : 1.0,
+                            value: playerState.position.inMilliseconds.toDouble().clamp(
+                                  0.0,
+                                  playerState.duration.inMilliseconds > 0
+                                      ? playerState.duration.inMilliseconds.toDouble()
+                                      : 1.0,
+                                ),
                             onChanged: (value) => notifier.seek(Duration(milliseconds: value.toInt())),
                           ),
                         ),

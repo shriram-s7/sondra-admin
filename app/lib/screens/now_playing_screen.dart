@@ -69,9 +69,14 @@ class NowPlayingScreen extends ConsumerWidget {
                   IconButton(
                     icon: const Icon(Icons.queue_music_rounded, color: Colors.white70, size: 22),
                     onPressed: () {
+                      ref.read(showNowPlayingProvider.notifier).state = false;
                       Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const QueueScreen()),
-                      );
+                      ).then((_) {
+                        if (context.mounted) {
+                          ref.read(showNowPlayingProvider.notifier).state = true;
+                        }
+                      });
                     },
                   ),
                 ],

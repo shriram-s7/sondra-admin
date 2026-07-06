@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/offline_storage.dart';
 import '../widgets/song_picker.dart';
 
+import '../services/download_manager.dart';
+
 class CreateOfflinePlaylistScreen extends ConsumerStatefulWidget {
   final String type;
 
@@ -37,10 +39,25 @@ class _CreateOfflinePlaylistScreenState
     final playlist = await storage.createPlaylist(name, type: widget.type);
     if (selectedSongs.isNotEmpty) {
       await storage.addSongsToPlaylist(playlist['id'] as int, selectedSongs);
+
+      if (widget.type == 'offline') {
+        final updatedPl = storage.getPlaylist(playlist['id'] as int);
+        if (updatedPl != null) {
+          final updatedSongs = List<Map<String, dynamic>>.from(updatedPl['songs'] ?? []);
+          for (final song in selectedSongs) {
+            try {
+              final entry = updatedSongs.firstWhere((s) => s['song_id'] == song['id']);
+              DownloadManager().downloadSong(playlist['id'] as int, entry);
+            } catch (e) {
+              print("Failed to download song on playlist init: $e");
+            }
+          }
+        }
+      }
     }
 
     if (mounted) {
-      Navigator.of(context).pop(playlist);
+      Navigator.of(context).pop(playlist['id'] as int);
     }
   }
 
@@ -68,93 +85,97 @@ class _CreateOfflinePlaylistScreenState
   }
 
   Widget _buildNameStep() {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: TextField(
-            controller: _nameController,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              hintText: 'Playlist name',
-              hintStyle: const TextStyle(color: Colors.white24),
-              filled: true,
-              fillColor: Colors.white.withOpacity(0.05),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+    return SafeArea(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: TextField(
+              controller: _nameController,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Playlist name',
+                hintStyle: const TextStyle(color: Colors.white24),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.05),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
+                ),
               ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
-              ),
-            ),
-            autofocus: true,
-          ),
-        ),
-        const Spacer(),
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _nameController.text.trim().isEmpty ? null : () {
-                setState(() => _showSongPicker = true);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8B5CF6),
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: const Text('Next', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              autofocus: true,
             ),
           ),
-        ),
-        const SizedBox(height: 32),
-      ],
+          const Spacer(),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _nameController.text.trim().isEmpty ? null : () {
+                  setState(() => _showSongPicker = true);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF8B5CF6),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text('Next', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
     );
   }
 
   Widget _buildSongPicker() {
-    return Column(
-      children: [
-        Expanded(
-          child: SongPickerWidget(
-            key: _songPickerKey,
-            showLoading: true,
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _creating
-                  ? null
-                  : () {
-                      final selected = _songPickerKey.currentState?.selectedSongs ?? [];
-                      _onSongsConfirmed(selected);
-                    },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8B5CF6),
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: _creating
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Text('Create Playlist', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+    return SafeArea(
+      child: Column(
+        children: [
+          Expanded(
+            child: SongPickerWidget(
+              key: _songPickerKey,
+              showLoading: true,
             ),
           ),
-        ),
-      ],
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _creating
+                    ? null
+                    : () {
+                        final selected = _songPickerKey.currentState?.selectedSongs ?? [];
+                        _onSongsConfirmed(selected);
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF8B5CF6),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFF8B5CF6).withOpacity(0.3),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: _creating
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text('Create Playlist', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
