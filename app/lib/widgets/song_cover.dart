@@ -36,11 +36,21 @@ class SongCoverWidget extends StatelessWidget {
     final coverUrl = "$baseUrl/api/songs/${song["id"]}/cover?v=${song["id"]}";
 
     final host = Uri.tryParse(baseUrl)?.host ?? "";
+
+    // Create a stable cache key using title and artist to avoid collisions
+    // when database auto-incrementing song IDs are re-assigned after a Google Drive sync.
+    final titleKey = (song["title"] ?? "").toString().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+    final artistKey = (song["artist"] ?? "").toString().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+    final cacheIdentifier = (titleKey.isNotEmpty || artistKey.isNotEmpty)
+        ? "${titleKey}_$artistKey"
+        : "${song["id"]}";
+    final cacheKey = "song_cover_${host}_$cacheIdentifier";
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
       child: CachedNetworkImage(
         imageUrl: coverUrl,
-        cacheKey: "song_cover_${host}_${song["id"]}",
+        cacheKey: cacheKey,
         width: width,
         height: height,
         fit: BoxFit.cover,
