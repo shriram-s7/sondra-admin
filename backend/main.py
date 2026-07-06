@@ -133,6 +133,11 @@ app.include_router(sync.router, prefix="/api")
 app.include_router(history.router)
 app.include_router(history.router, prefix="/api")
 
+# Mount static files for React Admin Panel
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/admin", StaticFiles(directory=static_dir, html=True), name="admin")
+
 @app.get("/events")
 async def root_sse_events(request: Request):
     from routers.sync import sse_events_endpoint

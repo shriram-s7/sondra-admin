@@ -216,26 +216,36 @@ class SondraAudioHandler extends BaseAudioHandler {
           }
         }
       }
-      if (isWindows && autoPlay) {
-        await _player.play();
-        if (_smtc != null) {
-          _smtc!.setPlaybackStatus(PlaybackStatus.Playing);
-        }
-      }
       if (autoPlay) {
-        if (!isWindows) {
-          if (_player.processingState != ProcessingState.ready) {
-            await _player.processingStateStream.firstWhere(
-              (state) => state == ProcessingState.ready || state == ProcessingState.idle,
-            ).timeout(const Duration(seconds: 15));
-          }
-          if (_player.processingState == ProcessingState.idle) {
-            throw Exception("Audio source failed to load");
-          }
-          await _player.play();
-          if (!_player.playing) {
-            await _player.playingStream.firstWhere((playing) => playing);
-          }
+        // Wait for the audio source to be fully loaded before calling play().
+        // This is critical on Windows: setAudioSource() returns before the
+        // Windows Media Foundation pipeline is ready. Calling play() too early
+        // silently fails and the player stays paused.
+        if (_player.processingState == ProcessingState.loading ||
+            _player.processingState == ProcessingState.buffering) {
+          await _player.processingStateStream.firstWhere(
+            (state) => state == ProcessingState.ready || state == ProcessingState.idle,
+          ).timeout(const Duration(seconds: 15));
+        }
+        if (_player.processingState == ProcessingState.idle) {
+          throw Exception("Audio source failed to load");
+        }
+        // Issue an explicit play() command. On Windows, this must happen AFTER
+        // the audio is in ProcessingState.ready, otherwise it is ignored.
+        await _player.play();
+        // On Windows: immediately force SMTC to Playing status so the taskbar
+        // shows the correct state regardless of any async Riverpod state lag.
+        if (isWindows && _smtc != null) {
+          _smtc!.setPlaybackStatus(PlaybackStatus.Playing);
+          _smtc!.setIsNextEnabled(true);
+          _smtc!.setIsPrevEnabled(true);
+          _smtc!.setIsPlayEnabled(true);
+          _smtc!.setIsPauseEnabled(true);
+        }
+        if (!_player.playing) {
+          // Safety: wait for playing confirmation, but don't block indefinitely.
+          await _player.playingStream.firstWhere((playing) => playing)
+              .timeout(const Duration(seconds: 3), onTimeout: () => false);
         }
         playbackState.add(_transformEvent(_player.playbackEvent));
         onPlayingChanged?.call(true);

@@ -149,11 +149,12 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         } else {
           if (_advancingTrack) return;
           _advancingTrack = true;
-          try {
-            handleNext();
-          } finally {
+          // Use unawaited async call: handleNext() is async and must run
+          // independently. The finally block would reset _advancingTrack
+          // before playSong() runs if we used try/finally synchronously.
+          handleNext().whenComplete(() {
             _advancingTrack = false;
-          }
+          });
         }
       }
     });
@@ -182,7 +183,12 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     if (_isBusy && !internalCall) return;
     _isBusy = true;
     try {
-      final autoPlay = internalCall ? (state.isPlaying || _advancingTrack || globalAudioHandler.player.playing) : true;
+      // autoPlay is true whenever: user taps a song directly OR we are
+      // mid-track-advance (auto-next or skip). The _advancingTrack flag is
+      // set before handleNext() resolves, so we can rely on it here.
+      final autoPlay = internalCall
+          ? (_advancingTrack || state.isPlaying || globalAudioHandler.player.playing)
+          : true;
       final isNewQueue = playlist.length != state.originalPlaylist.length ||
           playlist.asMap().entries.any((e) => state.originalPlaylist.length <= e.key || e.value["id"] != state.originalPlaylist[e.key]["id"]);
 
