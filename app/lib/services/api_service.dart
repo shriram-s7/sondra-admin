@@ -140,7 +140,12 @@ class ApiService {
     });
   }
 
-  Future<String> getDownloadUrl(int songId) async {
+  Future<String> getDirectStreamUrl(int songId) async {
+    final res = await dio.get("/api/stream/$songId/direct");
+    return res.data["url"] as String;
+  }
+
+  String getProxyStreamUrl(int songId) {
     return "$baseUrl/api/stream/$songId/proxy?token=$token";
   }
 

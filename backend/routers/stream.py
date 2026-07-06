@@ -168,6 +168,50 @@ async def stream_song_proxy(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proxy streaming failed: {str(e)}")
 
+@router.get("/{song_id}/direct")
+def stream_song_direct(
+    song_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: str = Depends(verify_token)
+):
+    """
+    Returns a direct Google Drive stream URL (bypasses Render proxy).
+    Ensures the file is publicly accessible first, then returns a webContentLink.
+    """
+    song = db.query(models.Song).filter(models.Song.id == song_id).first()
+    if not song:
+        raise HTTPException(status_code=404, detail="Song not found")
+
+    # Only create permission if not already public
+    if not song.is_public:
+        gdrive.ensure_public(song.gdrive_file_id)
+        song.is_public = True
+        db.commit()
+
+    link = gdrive.get_content_link(song.gdrive_file_id)
+    return {"url": link}
+
+
+@router.get("/{song_id}/direct/refresh")
+def stream_song_direct_refresh(
+    song_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: str = Depends(verify_token)
+):
+    """
+    Forces a fresh webContentLink fetch, useful if a link goes stale.
+    Does NOT touch the is_public flag.
+    """
+    song = db.query(models.Song).filter(models.Song.id == song_id).first()
+    if not song:
+        raise HTTPException(status_code=404, detail="Song not found")
+
+    link = gdrive.get_content_link(song.gdrive_file_id)
+    return {"url": link}
+
+
 @router.post("/{song_id}/listen")
 def record_listen(
     song_id: int,

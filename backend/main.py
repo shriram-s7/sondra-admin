@@ -16,6 +16,15 @@ load_dotenv(override=True)
 # Create database tables if they do not exist
 models.Base.metadata.create_all(bind=engine)
 
+# Guarded migration: add is_public column if missing (SQLite has no IF NOT EXISTS)
+try:
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE songs ADD COLUMN is_public BOOLEAN DEFAULT 0"))
+        conn.commit()
+except Exception:
+    pass  # Column already exists — safe on every restart
+
 # Periodic Sync Daemon task definition
 async def run_periodic_sync_daemon():
     # Allow uvicorn to fully bind ports before the first immediate sync trigger

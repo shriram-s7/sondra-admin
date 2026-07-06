@@ -61,7 +61,12 @@ class DownloadManager {
           await _api.init(); // Re-authenticates and refreshes the token on Render
         }
 
-        final url = '${_api.baseUrl}/api/stream/$songId/proxy?token=${_api.token}';
+        String url;
+        try {
+          url = await _api.getDirectStreamUrl(songId);
+        } catch (e) {
+          url = _api.getProxyStreamUrl(songId);
+        }
         print("Download request details: URL=$url, method=GET, headers={Authorization: Bearer ${_api.token}}");
 
         await _api.dio.download(

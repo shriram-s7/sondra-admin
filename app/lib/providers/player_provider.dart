@@ -88,6 +88,9 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   DateTime? _lastActionTime;
   Timer? _bufferingTimer;
   Timer? _bufferingSevereTimer;
+  int _consecutiveRetryCount = 0;
+  bool _usingDirectUrl = false;
+  Timer? _seekVerificationTimer;
   // Protection window: ignore playing=false events from the playingStream
   // within this period after a transition. Windows Media Foundation fires
   // delayed false events AFTER play() succeeds, which would override the
@@ -210,8 +213,21 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     });
   }
 
+  // Invariant: DownloadManager().downloadSong() is only triggered by explicit
+  // "Download for Offline" / offline-playlist actions, never by playSong().
+  // playSong() never initiates local downloads — it only reads already-downloaded files.
   Future<void> playSong(Map<String, dynamic> song, List<Map<String, dynamic>> playlist, {int? startSeconds, String? playlistName, bool internalCall = false, bool forcePlay = false}) async {
     if (_isBusy && !internalCall) return;
+
+    // Reset retry counter when genuinely starting a new song (different from current)
+    if (state.currentSong?["id"] != song["id"]) {
+      _consecutiveRetryCount = 0;
+    }
+
+    // Reset seek verification state at start of every song load
+    _usingDirectUrl = false;
+    _seekVerificationTimer?.cancel();
+
     _isBusy = true;
     try {
       // autoPlay rules:
@@ -242,9 +258,22 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       final dlDir = await OfflineStorage().downloadsDir;
       final localFile = File('$dlDir/${song["id"]}.mp3');
       final localExists = await localFile.exists() && await localFile.length() > 0;
-      final url = localExists
-          ? localFile.path
-          : "${_api.baseUrl}/api/stream/${song["id"]}/proxy?token=${_api.token}";
+
+      String url;
+      if (localExists) {
+        url = localFile.path;
+      } else if (OfflineStorage().isSeekUnreliableSync(song["id"])) {
+        // Song previously flagged for silent seek failures on direct URL
+        url = _api.getProxyStreamUrl(song["id"]);
+      } else {
+        try {
+          url = await _api.getDirectStreamUrl(song["id"]);
+        } catch (e) {
+          // Metadata call itself failed (auth/network) — fall back to proxy immediately
+          url = _api.getProxyStreamUrl(song["id"]);
+        }
+      }
+      _usingDirectUrl = !localExists && !url.contains('/proxy');
 
       final mediaItem = MediaItem(
         id: song["id"].toString(),
@@ -260,8 +289,19 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         globalAudioHandler.setSmtcPlaying(true);
       }
 
-      await globalAudioHandler.playUri(url, mediaItem, autoPlay: autoPlay)
-          .timeout(const Duration(seconds: 20));
+      try {
+        await globalAudioHandler.playUri(url, mediaItem, autoPlay: autoPlay)
+            .timeout(const Duration(seconds: 20));
+      } catch (e) {
+        // playUri failed — if we were using a direct Drive URL, retry once via proxy
+        if (!localExists && !url.contains('/proxy')) {
+          final fallbackUrl = _api.getProxyStreamUrl(song["id"]);
+          await globalAudioHandler.playUri(fallbackUrl, mediaItem, autoPlay: autoPlay)
+              .timeout(const Duration(seconds: 20));
+        } else {
+          rethrow;
+        }
+      }
 
       state = state.copyWith(isBuffering: false);
 
@@ -270,7 +310,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       }
 
       if (startSeconds != null) {
-        await globalAudioHandler.seek(Duration(seconds: startSeconds));
+        await seek(Duration(seconds: startSeconds));
       }
     } catch (e) {
       state = state.copyWith(isBuffering: false, bufferingMessage: null);
@@ -297,7 +337,42 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   }
 
   Future<void> seek(Duration pos) async {
+    _seekVerificationTimer?.cancel();
+    final preSeekPosition = state.position;
     await globalAudioHandler.seek(pos);
+
+    // Verify seek actually moved — only for direct-URL playback (not local/proxy)
+    if (_usingDirectUrl && state.currentSong != null) {
+      final songId = state.currentSong!["id"] as int;
+      _seekVerificationTimer = Timer(const Duration(seconds: 3), () {
+        _seekVerificationTimer = null;
+        final currentPos = globalAudioHandler.player.position;
+        final movedBy = (currentPos - preSeekPosition).abs();
+        // Only flag if the seek target was non-trivial (> 3s away) and position barely changed
+        if ((pos - preSeekPosition).abs() > const Duration(seconds: 3) && movedBy < const Duration(seconds: 1)) {
+          OfflineStorage().markSeekUnreliable(songId);
+          _reloadViaProxyWithPosition(pos);
+        }
+      });
+    }
+  }
+
+  Future<void> _reloadViaProxyWithPosition(Duration targetPos) async {
+    if (state.currentSong == null || state.activePlaylist.isEmpty) return;
+    _seekVerificationTimer?.cancel();
+    _usingDirectUrl = false;
+    final song = state.currentSong!;
+    final playlist = state.activePlaylist;
+    final plName = state.activePlaylistName;
+    _isBusy = false;
+    await playSong(
+      song,
+      playlist,
+      startSeconds: targetPos.inSeconds,
+      playlistName: plName,
+      internalCall: true,
+      forcePlay: true,
+    );
   }
 
   void _secureShuffle<T>(List<T> list) {
@@ -588,7 +663,39 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
 
   Future<void> _retryCurrentSong() async {
     if (state.currentSong == null || state.activePlaylist.isEmpty) return;
+
+    _consecutiveRetryCount++;
+
+    if (_consecutiveRetryCount >= 3) {
+      state = state.copyWith(
+        bufferingMessage: "Couldn't load this track, skipping...",
+      );
+      _consecutiveRetryCount = 0;
+      _bufferingTimer?.cancel();
+      _bufferingSevereTimer?.cancel();
+      _bufferingTimer = null;
+      _bufferingSevereTimer = null;
+      await handleNext();
+      return;
+    }
+
+    // Exponential backoff: 25 * 2^count seconds, capped at 90s
+    final delaySec = (25 * (1 << _consecutiveRetryCount)).clamp(0, 90);
+    state = state.copyWith(
+      bufferingMessage: "Buffering stalled, retrying in ${delaySec}s...",
+    );
+
     _isBusy = false;
+    await Future.delayed(Duration(seconds: delaySec));
+
+    if (state.currentSong == null || state.activePlaylist.isEmpty) return;
+
+    // Force isBuffering false so that the playerStateStream listener sees a
+    // transition (nowBuffering && !wasBuffering) and re-arms the buffering timers.
+    state = state.copyWith(isBuffering: false);
+    // Small yield to let the listener process the false state
+    await Future.delayed(const Duration(milliseconds: 50));
+
     await playSong(
       state.currentSong!,
       state.activePlaylist,
@@ -605,6 +712,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
     _positionLogTimer?.cancel();
     _bufferingTimer?.cancel();
     _bufferingSevereTimer?.cancel();
+    _seekVerificationTimer?.cancel();
     super.dispose();
   }
 }

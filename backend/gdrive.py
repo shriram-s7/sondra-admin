@@ -17,7 +17,10 @@ from mutagen.flac import FLAC
 
 load_dotenv()
 
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive",
+]
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def get_drive_service():
@@ -383,21 +386,34 @@ def get_file_metadata(gdrive_file_id: str):
     return metadata
 
 
-def get_direct_stream_url(gdrive_file_id: str) -> str:
+def ensure_public(gdrive_file_id: str):
     """
-    Ensures the Google Drive file is temporarily accessible by anyone with the link
-    and returns a direct streamable download link.
+    Makes the file publicly readable by anyone with the link.
+    Idempotent — if the permission already exists, the error is swallowed.
     """
     service = get_drive_service()
     try:
-        # Check or create reader permission for "anyone"
-        permission = {
-            'type': 'anyone',
-            'role': 'reader'
-        }
+        permission = {'type': 'anyone', 'role': 'reader'}
         service.permissions().create(fileId=gdrive_file_id, body=permission).execute()
     except Exception as e:
-        print(f"Error creating file sharing permission for {gdrive_file_id}: {e}")
-    
-    # Return the direct usercontent download URL format to bypass cross-origin redirect headers
+        # Google returns 409/403 if permission already exists; safe to ignore
+        print(f"ensure_public ({gdrive_file_id}): {e}")
+
+
+def get_content_link(gdrive_file_id: str) -> str:
+    """
+    Fetches the webContentLink for a Google Drive file.
+    Falls back to constructing a usercontent download URL if the metadata field is empty.
+    """
+    service = get_drive_service()
+    try:
+        file_info = service.files().get(
+            fileId=gdrive_file_id, fields="webContentLink"
+        ).execute()
+        link = file_info.get("webContentLink")
+        if link:
+            return link
+    except Exception as e:
+        print(f"get_content_link ({gdrive_file_id}): {e}")
+
     return f"https://drive.usercontent.google.com/download?id={gdrive_file_id}&export=download"

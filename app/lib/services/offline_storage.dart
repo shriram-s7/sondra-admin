@@ -10,6 +10,7 @@ class OfflineStorage {
   OfflineStorage._();
 
   List<Map<String, dynamic>> _playlists = [];
+  Set<int> _seekUnreliableIds = {};
 
   Future<String> get _storageDir async {
     try {
@@ -56,8 +57,19 @@ class OfflineStorage {
     }
   }
 
+  static const String _seekUnreliableKey = "seek_unreliable_song_ids";
+
   Future<void> init() async {
     await checkVersionAndCleanup();
+    // Load seek-unreliable set from SharedPreferences
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getStringList(_seekUnreliableKey) ?? [];
+      _seekUnreliableIds = raw.map((s) => int.tryParse(s) ?? -1).where((id) => id > 0).toSet();
+    } catch (e) {
+      print("Error loading seek-unreliable set: $e");
+      _seekUnreliableIds = {};
+    }
     final file = await _playlistsFile;
     if (await file.exists()) {
       final content = await file.readAsString();
@@ -126,6 +138,23 @@ class OfflineStorage {
       }
     }
     return 'notDownloaded';
+  }
+
+  Future<void> markSeekUnreliable(int songId) async {
+    _seekUnreliableIds.add(songId);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        _seekUnreliableKey,
+        _seekUnreliableIds.map((id) => id.toString()).toList(),
+      );
+    } catch (e) {
+      print("Error persisting seek-unreliable set: $e");
+    }
+  }
+
+  bool isSeekUnreliableSync(int songId) {
+    return _seekUnreliableIds.contains(songId);
   }
 
   Future<void> addSongsToPlaylist(int playlistId, List<Map<String, dynamic>> songs) async {
@@ -440,6 +469,9 @@ class OfflineStorage {
         await file.delete();
       }
       _playlists = []; // Clear in-memory cache
+      _seekUnreliableIds = {};
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_seekUnreliableKey);
 
       // 3. Clear just_audio cache
       await clearCache();

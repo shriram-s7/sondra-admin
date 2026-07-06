@@ -11,7 +11,7 @@ class SondraAudioHandler extends BaseAudioHandler {
       androidLoadControl: AndroidLoadControl(
         minBufferDuration: Duration(seconds: 15),
         maxBufferDuration: Duration(seconds: 50),
-        bufferForPlaybackDuration: Duration(milliseconds: 1000),
+        bufferForPlaybackDuration: Duration(milliseconds: 2500),
         bufferForPlaybackAfterRebufferDuration: Duration(seconds: 5),
       ),
     ),
