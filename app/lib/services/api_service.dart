@@ -141,8 +141,14 @@ class ApiService {
   }
 
   Future<String> getDirectStreamUrl(int songId) async {
-    final res = await dio.get("/api/stream/$songId/direct");
-    return res.data["url"] as String;
+    try {
+      final res = await dio.get("/api/stream/$songId/direct");
+      print('[DIRECT-API] response for song $songId: status=${res.statusCode} body=${res.data}');
+      return res.data["url"] as String;
+    } catch (e) {
+      print('[DIRECT-API] threw for song $songId: $e');
+      rethrow;
+    }
   }
 
   String getProxyStreamUrl(int songId) {

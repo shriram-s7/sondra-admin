@@ -64,7 +64,9 @@ class DownloadManager {
         String url;
         try {
           url = await _api.getDirectStreamUrl(songId);
-        } catch (e) {
+        } catch (e, stack) {
+          print('[DIRECT-FAIL-DL] getDirectStreamUrl threw for song $songId: $e');
+          print('[DIRECT-FAIL-DL] stack: $stack');
           url = _api.getProxyStreamUrl(songId);
         }
         print("Download request details: URL=$url, method=GET, headers={Authorization: Bearer ${_api.token}}");

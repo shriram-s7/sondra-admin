@@ -263,13 +263,14 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       if (localExists) {
         url = localFile.path;
       } else if (OfflineStorage().isSeekUnreliableSync(song["id"])) {
-        // Song previously flagged for silent seek failures on direct URL
+        print('[DIRECT-SKIP] song ${song["id"]} skipping direct because isSeekUnreliable=true');
         url = _api.getProxyStreamUrl(song["id"]);
       } else {
         try {
           url = await _api.getDirectStreamUrl(song["id"]);
-        } catch (e) {
-          // Metadata call itself failed (auth/network) — fall back to proxy immediately
+        } catch (e, stack) {
+          print('[DIRECT-FAIL] getDirectStreamUrl threw for song ${song["id"]}: $e');
+          print('[DIRECT-FAIL] stack: $stack');
           url = _api.getProxyStreamUrl(song["id"]);
         }
       }
@@ -292,9 +293,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
       try {
         await globalAudioHandler.playUri(url, mediaItem, autoPlay: autoPlay)
             .timeout(const Duration(seconds: 20));
-      } catch (e) {
-        // playUri failed — if we were using a direct Drive URL, retry once via proxy
+      } catch (e, stack) {
         if (!localExists && !url.contains('/proxy')) {
+          print('[DIRECT-LOAD-FAIL] playUri failed for direct URL, song ${song["id"]}: $e');
+          print('[DIRECT-LOAD-FAIL] url was: $url');
+          print('[DIRECT-LOAD-FAIL] stack: $stack');
           final fallbackUrl = _api.getProxyStreamUrl(song["id"]);
           await globalAudioHandler.playUri(fallbackUrl, mediaItem, autoPlay: autoPlay)
               .timeout(const Duration(seconds: 20));
