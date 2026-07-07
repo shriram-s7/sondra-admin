@@ -83,7 +83,9 @@ const SongCover = ({ song, size = "40px", fontSize = "14px" }: { song: Song; siz
 
   const apiBase = import.meta.env.VITE_API_URL || "";
   const cleanApiBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
-  const coverUrl = song.cover_url || `${cleanApiBase}/api/songs/${song.id}/cover`;
+  const coverUrl = (song.cover_url && (song.cover_url.startsWith('data:') || song.cover_url.startsWith('http')))
+    ? song.cover_url
+    : (song.cover_url ? `${cleanApiBase}/api/songs/${song.id}/cover` : undefined);
 
   if (hasError || !song.cover_url) {
     const colors = getSeededColors(title);

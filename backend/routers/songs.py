@@ -7,7 +7,7 @@ from typing import List, Optional
 from database import get_db
 from routers.auth import get_current_admin
 import models
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from datetime import datetime
 
 router = APIRouter(prefix="/songs", tags=["Songs"])
@@ -48,6 +48,13 @@ class SongResponse(BaseModel):
     playlist_id: Optional[int] = None
     created_at: datetime
     playlist: Optional[PlaylistBriefResponse] = None
+
+    @validator("cover_url", pre=True, always=True)
+    def resolve_cover_url(cls, v, values):
+        song_id = values.get("id")
+        if v and song_id:
+            return f"/api/songs/{song_id}/cover"
+        return None
 
     class Config:
         orm_mode = True
